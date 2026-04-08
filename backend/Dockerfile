@@ -2,6 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# В контейнере кэш и venv на разных слоях FS — без copy uv спамит предупреждением о hardlink
+ENV UV_LINK_MODE=copy
+
 # Установка менеджера пакетов uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 

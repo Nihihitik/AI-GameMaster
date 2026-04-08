@@ -1,41 +1,29 @@
 """Модель пользователя."""
 
-import enum
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Enum, DateTime, func
+from sqlalchemy import String, TIMESTAMP, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.database import Base
 
 
-class UserPlan(str, enum.Enum):
-    """Тарифный план пользователя."""
-    FREE = "free"
-    PREMIUM = "premium"
-
-
 class User(Base):
-    """Пользователь системы."""
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    hash_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    plan: Mapped[UserPlan] = mapped_column(
-        Enum(UserPlan), default=UserPlan.FREE, nullable=False
-    )
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )
 
-    # Связи
-    sessions: Mapped[list["Session"]] = relationship(back_populates="owner")
-    session_players: Mapped[list["SessionPlayer"]] = relationship(back_populates="user")
+    sessions: Mapped[list["Session"]] = relationship(back_populates="host_user")
+    players: Mapped[list["Player"]] = relationship(back_populates="user")
+    subscriptions: Mapped[list["Subscription"]] = relationship(back_populates="user")

@@ -1,0 +1,132 @@
+"""Recovery-сервис для продакшн режима.
+
+Цель: после рестарта backend автоматически продолжать активные игры:
+- пересоздавать таймеры (role_reveal/discussion/voting/ночные ходы)
+- возобновлять ночную последовательность (mafia -> doctor -> sheriff)
+
+Источник истины: БД (sessions, game_phases, game_events, night_actions, day_votes).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+
+from core.database import async_session_factory
+from models.game_phase import GamePhase
+from models.session import Session
+from services.game_engine import (
+    execute_night_sequence,
+    get_current_phase,
+    resolve_votes,
+    transition_to_night,
+    transition_to_voting,
+)
+from services.runtime_state import runtime_state
+from services.state_service import restore_runtime_like_fields
+from services.timer_service import timer_service
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _remaining_seconds(timer_seconds: int | None, started_at: datetime | None) -> int | None:
+    if timer_seconds is None or started_at is None:
+        return None
+    elapsed = (_now() - started_at).total_seconds()
+    remaining = int(timer_seconds - elapsed)
+    return remaining
+
+
+async def _recover_one_session(session_id: uuid.UUID) -> None:
+    # Важно: recovery может запускать фоновые задачи.
+    # Нельзя передавать наружу db-сессию из этого контекста.
+    async with async_session_factory() as db:
+        session = await db.get(Session, session_id)
+        if not session or session.status != "active":
+            return
+        phase = await get_current_phase(db, session_id)
+        if not phase:
+            return
+
+        restored = await restore_runtime_like_fields(db, session_id, phase)
+        rt = runtime_state.get(session_id)
+        rt.day_sub_phase = restored["sub_phase"]
+        rt.night_turn = restored["night_turn"]
+        rt.timer_seconds = restored["timer_seconds"]
+        rt.timer_started_at = restored["timer_started_at"]
+
+        remaining = _remaining_seconds(rt.timer_seconds, rt.timer_started_at)
+
+        # role_reveal timer
+        if phase.phase_type == "role_reveal":
+            seconds = remaining if remaining is not None else int((session.settings or {}).get("role_reveal_timer_seconds") or 15)
+            if seconds <= 0:
+                await transition_to_night(session_id, 1)
+                return
+            if not timer_service.has_timer(session_id, "role_reveal"):
+                await timer_service.start_timer(session_id, "role_reveal", seconds, lambda: transition_to_night(session_id, 1))
+            return
+
+        # day timers
+        if phase.phase_type == "day":
+            if rt.day_sub_phase == "discussion":
+                seconds = remaining if remaining is not None else int((session.settings or {}).get("discussion_timer_seconds") or 120)
+                if seconds <= 0:
+                    await transition_to_voting(session_id)
+                    return
+                if not timer_service.has_timer(session_id, "discussion"):
+                    await timer_service.start_timer(session_id, "discussion", seconds, lambda: transition_to_voting(session_id))
+                return
+            if rt.day_sub_phase == "voting":
+                seconds = remaining if remaining is not None else int((session.settings or {}).get("voting_timer_seconds") or 60)
+                if seconds <= 0:
+                    await resolve_votes(session_id)
+                    return
+                if not timer_service.has_timer(session_id, "voting"):
+                    await timer_service.start_timer(session_id, "voting", seconds, lambda: resolve_votes(session_id))
+                return
+            # если подфаза потеряна — безопасно считаем discussion
+            await transition_to_voting(session_id)
+            return
+
+        # night: возобновить последовательность
+        if phase.phase_type == "night":
+            if rt.night_sequence_running:
+                return
+            rt.night_sequence_running = True
+
+            async def _run():
+                from core.database import async_session_factory as _factory
+                try:
+                    async with _factory() as db2:
+                        s2 = await db2.get(Session, session_id)
+                        p2 = await db2.get(GamePhase, phase.id)
+                        if s2 and p2:
+                            await execute_night_sequence(db2, s2, p2)
+                finally:
+                    rt.night_sequence_running = False
+
+            asyncio.create_task(_run())
+            return
+
+
+async def recovery_loop(poll_seconds: int = 3) -> None:
+    """Фоновый процесс: периодически восстанавливает активные сессии."""
+    while True:
+        try:
+            async with async_session_factory() as db:
+                active_ids = (
+                    await db.scalars(select(Session.id).where(Session.status == "active"))
+                ).all()
+            for sid in active_ids:
+                await _recover_one_session(sid)
+        except Exception:
+            # не заваливаем сервер — recovery должен быть "best effort"
+            pass
+        await asyncio.sleep(poll_seconds)
+
