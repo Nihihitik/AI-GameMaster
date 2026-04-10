@@ -1,0 +1,71 @@
+.mafia-slider {
+  width: 100%;
+  margin: 8px 0;
+
+  &__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  &__label {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  &__value {
+    font-size: 13px;
+    color: #c81e1e;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 4px;
+    background: linear-gradient(
+      to right,
+      #c81e1e 0%,
+      #c81e1e var(--progress, 0%),
+      rgba(255, 255, 255, 0.1) var(--progress, 0%),
+      rgba(255, 255, 255, 0.1) 100%
+    );
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+
+    &::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      background: #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 0 8px rgba(200, 30, 30, 0.4);
+      cursor: pointer;
+      transition: transform 0.15s ease;
+
+      &:active {
+        transform: scale(1.2);
+      }
+    }
+
+    &::-moz-range-thumb {
+      width: 20px;
+      height: 20px;
+      background: #ffffff;
+      border: none;
+      border-radius: 50%;
+      box-shadow: 0 0 8px rgba(200, 30, 30, 0.4);
+      cursor: pointer;
+    }
+  }
+
+  &--disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+}

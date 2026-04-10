@@ -1,0 +1,114 @@
+.auth-page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-color: #000000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  position: relative;
+
+  &__content {
+    width: 100%;
+    max-width: 600px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background-color: transparent; // Let the background black show through
+    position: relative;
+    z-index: 1;
+  }
+
+  &__hero {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+
+    &-image {
+      width: 100%;
+      height: auto;
+      display: block;
+      object-fit: cover;
+    }
+  }
+}
+
+.auth-form-container {
+  width: 100%;
+  max-width: 480px;
+  padding: 0 28px 40px;
+  margin-top: 20px;
+  position: relative;
+  z-index: 2;
+  box-sizing: border-box;
+}
+
+// Auth form styles (shared between Login and Register)
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+
+  &__subtitle {
+    font-family: 'Inter', 'Segoe UI', Roboto, sans-serif;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.35);
+    margin: 12px 0 0 0;
+    text-align: center;
+    line-height: 1.4;
+    font-style: italic;
+  }
+
+  &__error {
+    width: 100%;
+    background: rgba(200, 30, 30, 0.1);
+    border: 1px solid rgba(200, 30, 30, 0.3);
+    border-radius: 12px;
+    padding: 10px 16px;
+    color: #ff4444;
+    font-size: 13px;
+    text-align: center;
+    margin-bottom: 12px;
+    animation: auth-error-shake 0.4s ease;
+    box-sizing: border-box;
+  }
+
+  &__actions {
+    width: 100%;
+    margin-top: 8px;
+  }
+
+  &__toggle {
+    margin-top: 16px;
+    text-align: center;
+  }
+}
+
+@keyframes auth-error-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+
+// Fade-in animation for form switching
+.auth-form-enter {
+  animation: auth-fade-in 0.35s ease forwards;
+}
+
+@keyframes auth-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
