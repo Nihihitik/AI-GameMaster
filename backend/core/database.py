@@ -15,7 +15,7 @@ engine = create_async_engine(
 )
 
 # Фабрика асинхронных сессий для работы с БД
-async_session_maker = async_sessionmaker(
+async_session_factory = async_sessionmaker(
     engine,
     class_=AsyncSession,
     expire_on_commit=False,
@@ -28,6 +28,17 @@ class Base(DeclarativeBase):
 
 
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
-    """Зависимость FastAPI для получения асинхронной сессии БД."""
-    async with async_session_maker() as session:
-        yield session
+    """Зависимость FastAPI для получения асинхронной сессии БД.
+
+    Важно: при исключении гарантирует rollback.
+    """
+    async with async_session_factory() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+
+
+# Backwards-compat alias (если где-то уже импортируют старое имя)
+async_session_maker = async_session_factory

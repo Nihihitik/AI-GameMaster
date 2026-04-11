@@ -1,9 +1,11 @@
 """Модель игровой фазы."""
 
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Integer, DateTime, ForeignKey, func
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, TIMESTAMP, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,23 +16,31 @@ class GamePhase(Base):
     """Фаза игры (день/ночь/голосование и т.д.)."""
     __tablename__ = "game_phases"
 
+    __table_args__ = (
+        UniqueConstraint("session_id", "phase_number", "phase_type", name="uq_phases_session_number_type"),
+        CheckConstraint("phase_type IN ('role_reveal', 'day', 'night')", name="ck_phases_type"),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     session_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False
+        UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False
     )
-    phase_order: Mapped[int] = mapped_column(Integer, nullable=False)
-    phase_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
+    phase_type: Mapped[str] = mapped_column(String(15), nullable=False)
+    phase_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )
-    ended_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    ended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     # Связи
     session: Mapped["Session"] = relationship(
-        back_populates="game_phases", foreign_keys=[session_id]
+        back_populates="phases", foreign_keys=[session_id]
     )
-    game_actions: Mapped[list["GameAction"]] = relationship(back_populates="phase")
+    night_actions: Mapped[list["NightAction"]] = relationship(
+        back_populates="phase", cascade="all, delete-orphan"
+    )
+    day_votes: Mapped[list["DayVote"]] = relationship(
+        back_populates="phase", cascade="all, delete-orphan"
+    )

@@ -1,56 +1,51 @@
 """Модель игровой сессии."""
 
-import enum
+from __future__ import annotations
+
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Integer, Enum, DateTime, ForeignKey, func
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, TIMESTAMP, func, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import JSONB
 
 from core.database import Base
-
-
-class SessionStatus(str, enum.Enum):
-    """Статус игровой сессии."""
-    WAITING = "waiting"
-    IN_PROGRESS = "in_progress"
-    FINISHED = "finished"
 
 
 class Session(Base):
     """Игровая сессия (лобби/партия)."""
     __tablename__ = "sessions"
 
+    __table_args__ = (
+        CheckConstraint("status IN ('waiting', 'active', 'finished')", name="ck_sessions_status"),
+        CheckConstraint("player_count BETWEEN 5 AND 20", name="ck_sessions_player_count"),
+        Index("idx_sessions_host", "host_user_id"),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    max_players: Mapped[int] = mapped_column(Integer, nullable=False)
-    owner_id: Mapped[uuid.UUID] = mapped_column(
+    code: Mapped[str] = mapped_column(String(6), unique=True, nullable=False, index=True)
+    host_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
-    status: Mapped[SessionStatus] = mapped_column(
-        Enum(SessionStatus), default=SessionStatus.WAITING, nullable=False
-    )
-    current_phase_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("game_phases.id"), nullable=True
-    )
+    player_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="waiting", nullable=False)
+    settings: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
     )
-    started_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    ended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     # Связи
-    owner: Mapped["User"] = relationship(back_populates="sessions")
-    current_phase: Mapped["GamePhase | None"] = relationship(
-        foreign_keys=[current_phase_id]
+    host_user: Mapped["User"] = relationship(back_populates="sessions")
+    players: Mapped[list["Player"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
     )
-    game_phases: Mapped[list["GamePhase"]] = relationship(
-        back_populates="session", foreign_keys="GamePhase.session_id"
+    phases: Mapped[list["GamePhase"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
     )
-    session_players: Mapped[list["SessionPlayer"]] = relationship(back_populates="session")
-    session_roles: Mapped[list["SessionRole"]] = relationship(back_populates="session")
-    game_actions: Mapped[list["GameAction"]] = relationship(back_populates="session")
+    events: Mapped[list["GameEvent"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan"
+    )

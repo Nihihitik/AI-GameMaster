@@ -1,23 +1,27 @@
-"""Регистрация всех ORM-моделей. Импорт здесь нужен для Alembic autogenerate."""
+"""Регистрация ORM-моделей (нужно для Alembic autogenerate)."""
 
-from models.user import User, UserPlan
+from models.user import User
+from models.session import Session
+from models.player import Player
 from models.role import Role
-from models.session import Session, SessionStatus
 from models.game_phase import GamePhase
-from models.session_player import SessionPlayer
-from models.session_role import SessionRole
-from models.player_role import PlayerRole
-from models.game_action import GameAction
+from models.night_action import NightAction
+from models.day_vote import DayVote
+from models.game_event import GameEvent
+from models.subscription import Subscription
+from models.payment import Payment
+from models.refresh_token import RefreshToken
 
 __all__ = [
     "User",
-    "UserPlan",
-    "Role",
     "Session",
-    "SessionStatus",
+    "Player",
+    "Role",
     "GamePhase",
-    "SessionPlayer",
-    "SessionRole",
-    "PlayerRole",
-    "GameAction",
+    "NightAction",
+    "DayVote",
+    "GameEvent",
+    "Subscription",
+    "Payment",
+    "RefreshToken",
 ]
