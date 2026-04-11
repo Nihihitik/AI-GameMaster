@@ -136,9 +136,18 @@ async def join_session(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> JoinResponse:
-    name = payload.name.strip()
-    if not name:
-        raise GameError(400, "validation_error", "name: Поле не должно быть пустым")
+    raw = payload.name
+    if raw:
+        name = raw[:32]
+    else:
+        dn = (current_user.display_name or "").strip()
+        if not dn:
+            raise GameError(
+                400,
+                "validation_error",
+                "name: передайте имя в join или задайте ник при регистрации",
+            )
+        name = dn[:32]
 
     session = await db.scalar(select(Session).where(Session.code == code))
     if session is None:
@@ -146,11 +155,17 @@ async def join_session(
     if session.status != "waiting":
         raise GameError(403, "wrong_phase", "Сессия не принимает новых игроков")
 
-    already = await db.scalar(
-        select(Player.id).where(Player.session_id == session.id, Player.user_id == current_user.id)
+    existing = await db.scalar(
+        select(Player).where(Player.session_id == session.id, Player.user_id == current_user.id)
     )
-    if already is not None:
-        raise GameError(409, "already_joined", "Вы уже подключены к этой сессии")
+    if existing is not None:
+        # Тот же аккаунт возвращается в комнату (после вылета клиента / перезапуска приложения).
+        # Другой человек не может занять чужой слот: привязка session_id + user_id уникальна.
+        return JoinResponse(
+            player_id=str(existing.id),
+            session_id=str(session.id),
+            join_order=existing.join_order,
+        )
 
     current_count = await db.scalar(
         select(func.count(Player.id)).where(Player.session_id == session.id)

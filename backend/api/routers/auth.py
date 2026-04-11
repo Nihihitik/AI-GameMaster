@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user, get_db
@@ -19,16 +20,19 @@ from models.subscription import Subscription
 from models.user import User
 from schemas.auth import (
     AuthResponse,
+    DeleteAccountRequest,
     LoginRequest,
     LogoutRequest,
     MeResponse,
     RefreshRequest,
     RegisterRequest,
     TokenResponse,
+    UpdateNicknameRequest,
 )
 from services.auth_service import (
     create_access_token,
     create_refresh_token,
+    delete_user_account,
     hash_password,
     hash_refresh_token,
     refresh_expires_at,
@@ -43,9 +47,14 @@ router = APIRouter()
 async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> AuthResponse:
     existing = await db.scalar(select(User).where(User.email == payload.email))
     if existing is not None:
-        raise GameError(409, "already_joined", "Пользователь с таким email уже существует")
+        raise GameError(409, "email_already_registered", "Этот email уже зарегистрирован")
 
-    user = User(id=uuid.uuid4(), email=payload.email, password_hash=hash_password(payload.password))
+    user = User(
+        id=uuid.uuid4(),
+        email=payload.email,
+        display_name=payload.nickname,
+        password_hash=hash_password(payload.password),
+    )
     db.add(user)
     await db.flush()
 
@@ -59,11 +68,16 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
             expires_at=refresh_expires_at(),
         )
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise GameError(409, "email_already_registered", "Этот email уже зарегистрирован")
 
     return AuthResponse(
         user_id=str(user.id),
         email=user.email,
+        nickname=user.display_name,
         access_token=access,
         refresh_token=refresh,
     )
@@ -92,6 +106,7 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> Au
     return AuthResponse(
         user_id=str(user.id),
         email=user.email,
+        nickname=user.display_name,
         access_token=access,
         refresh_token=refresh,
     )
@@ -148,9 +163,49 @@ async def me(current_user: User = Depends(get_current_user), db: AsyncSession = 
     return MeResponse(
         user_id=str(current_user.id),
         email=current_user.email,
+        nickname=current_user.display_name,
         has_pro=has_pro is not None,
         created_at=current_user.created_at.isoformat(),
     )
+
+
+@router.patch("/me", response_model=MeResponse)
+async def update_me_nickname(
+    payload: UpdateNicknameRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MeResponse:
+    current_user.display_name = payload.nickname
+    await db.commit()
+    await db.refresh(current_user)
+    now = datetime.now(timezone.utc)
+    has_pro = await db.scalar(
+        select(Subscription.id).where(
+            Subscription.user_id == current_user.id,
+            Subscription.plan == "pro",
+            Subscription.status == "active",
+            Subscription.period_end > now,
+        )
+    )
+    return MeResponse(
+        user_id=str(current_user.id),
+        email=current_user.email,
+        nickname=current_user.display_name,
+        has_pro=has_pro is not None,
+        created_at=current_user.created_at.isoformat(),
+    )
+
+
+@router.delete("/me", status_code=204)
+async def delete_account(
+    payload: DeleteAccountRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    if not verify_password(payload.password, current_user.password_hash):
+        raise GameError(401, "invalid_credentials", "Неверный пароль")
+    await delete_user_account(db, current_user.id)
+    return None
 
 
 @router.post("/logout", status_code=204)

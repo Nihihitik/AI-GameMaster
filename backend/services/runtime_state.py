@@ -29,6 +29,12 @@ class SessionRuntime:
     # background task marker (чтобы не запускать несколько recovery/sequence параллельно)
     night_sequence_running: bool = False
 
+    # пауза: таймеры остановлены, ночная последовательность ждёт снятия паузы
+    game_paused: bool = False
+
+    # прервать ночную последовательность (кик / срочный выход из ожидания хода)
+    night_sequence_abort: bool = False
+
 
 class RuntimeState:
     def __init__(self):

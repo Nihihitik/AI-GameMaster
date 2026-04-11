@@ -49,6 +49,9 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
         session = await db.get(Session, session_id)
         if not session or session.status != "active":
             return
+        gp = (session.settings or {}).get("game_pause")
+        if isinstance(gp, dict) and gp.get("paused"):
+            return
         phase = await get_current_phase(db, session_id)
         if not phase:
             return

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RoleConfig(BaseModel):
@@ -51,7 +51,17 @@ class SessionDetailResponse(BaseModel):
 
 
 class JoinRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=32)
+    """Если name не передан или пустой — в столе игрока подставится ник из профиля (регистрация)."""
+
+    name: str | None = Field(default=None, max_length=32)
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        return s if s else None
 
 
 class JoinResponse(BaseModel):

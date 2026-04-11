@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,10 @@ from models.game_event import GameEvent
 from models.player import Player
 from models.session import Session
 from schemas.session import PlayerInList, UpdateSettingsRequest
+from services.game_engine import apply_host_kick
+from services.pause_service import pause_game, resume_game
+from services.timer_service import timer_service
+from services.runtime_state import runtime_state
 from services.ws_manager import ws_manager
 
 
@@ -82,6 +86,7 @@ async def leave_lobby(
 async def kick_player(
     session_id: uuid.UUID,
     player_id: uuid.UUID,
+    confirm: bool = Query(False, description="Обязательно true при кике во время активной игры (подтверждение с клиента)"),
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -90,14 +95,37 @@ async def kick_player(
         raise GameError(404, "session_not_found", "Сессия не найдена")
     if session.host_user_id != current_user.id:
         raise GameError(403, "not_host", "Только организатор может выполнить это действие")
-    if session.status != "waiting":
-        raise GameError(409, "game_already_started", "Игра уже началась")
 
     player = await db.scalar(select(Player).where(Player.session_id == session_id, Player.id == player_id))
     if player is None:
         raise GameError(404, "player_not_found", "Игрок не найден в этой сессии")
     if player.user_id == current_user.id:
         raise GameError(403, "not_host", "Нельзя кикнуть себя")
+
+    if session.status == "active":
+        if not confirm:
+            raise GameError(
+                400,
+                "confirmation_required",
+                "Во время игры передайте query-параметр confirm=true после подтверждения пользователем",
+            )
+        await apply_host_kick(db, session, player)
+        kicked_user_id = player.user_id
+        await ws_manager.send_to_session(
+            session_id,
+            {
+                "type": "player_kicked",
+                "payload": {"player_id": str(player_id), "reason": "host_kicked"},
+            },
+        )
+        await ws_manager.send_to_user(
+            session_id, kicked_user_id, {"type": "kicked", "payload": {"reason": "host_kicked"}}
+        )
+        await ws_manager.close_connection(session_id, kicked_user_id, code=4000)
+        return None
+
+    if session.status != "waiting":
+        raise GameError(409, "game_already_started", "Игра уже началась или завершена")
 
     kicked_user_id = player.user_id
     await db.delete(player)
@@ -125,6 +153,11 @@ async def close_session(
     from datetime import datetime, timezone
 
     session.ended_at = datetime.now(timezone.utc)
+    cur_settings = dict(session.settings or {})
+    cur_settings.pop("game_pause", None)
+    session.settings = cur_settings
+    await timer_service.cancel_all(session_id)
+    runtime_state.clear(session_id)
     db.add(
         GameEvent(
             id=uuid.uuid4(),
@@ -179,4 +212,35 @@ async def update_settings(
         {"type": "settings_updated", "payload": {"settings": session.settings}},
     )
     return {"settings": session.settings}
+
+
+@router.post("/{session_id}/pause")
+async def pause_session(
+    session_id: uuid.UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await db.get(Session, session_id)
+    if session is None:
+        raise GameError(404, "session_not_found", "Сессия не найдена")
+    if session.host_user_id != current_user.id:
+        raise GameError(403, "not_host", "Только организатор может поставить игру на паузу")
+    return await pause_game(db, session)
+
+
+@router.post("/{session_id}/resume")
+async def resume_session(
+    session_id: uuid.UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await db.get(Session, session_id)
+    if session is None:
+        raise GameError(404, "session_not_found", "Сессия не найдена")
+    if session.host_user_id != current_user.id:
+        raise GameError(403, "not_host", "Только организатор может снять паузу")
+    if session.status != "active":
+        raise GameError(409, "wrong_phase", "Сессия не в игре")
+    await resume_game(session_id)
+    return {"resumed": True}
 

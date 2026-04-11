@@ -38,10 +38,11 @@ def _hdr(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def _register(client: httpx.AsyncClient, email: str, password: str) -> str:
+async def _register(client: httpx.AsyncClient, email: str, password: str, nickname: str | None = None) -> str:
+    nick = (nickname or email.split("@")[0])[:32]
     r = await client.post(
         "/api/auth/register",
-        json={"email": email, "password": password},
+        json={"email": email, "password": password, "nickname": nick},
     )
     r.raise_for_status()
     return r.json()["access_token"]

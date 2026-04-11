@@ -13,7 +13,7 @@ import random
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, delete, exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -201,7 +201,9 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
     )
     await db.commit()
 
-    total = await db.scalar(select(func.count(Player.id)).where(Player.session_id == session.id))
+    alive_total = await db.scalar(
+        select(func.count(Player.id)).where(Player.session_id == session.id, Player.status == "alive")
+    )
     acked = await db.scalar(
         select(func.count(GameEvent.id)).where(
             GameEvent.session_id == session.id,
@@ -209,16 +211,32 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
             GameEvent.event_type == "role_acknowledged",
         )
     )
-    total = int(total or 0)
+    alive_total = int(alive_total or 0)
     acked = int(acked or 0)
+    ack_subq = exists(
+        select(1).where(
+            GameEvent.session_id == session.id,
+            GameEvent.phase_id == phase.id,
+            GameEvent.event_type == "role_acknowledged",
+            GameEvent.payload["player_id"].astext == cast(Player.id, String),
+        )
+    )
+    pending_alive = await db.scalar(
+        select(func.count(Player.id)).where(
+            Player.session_id == session.id,
+            Player.status == "alive",
+            ~ack_subq,
+        )
+    )
+    pending_alive = int(pending_alive or 0)
     await ws_manager.send_to_session(
         session.id,
         {
             "type": "role_acknowledged",
-            "payload": {"player_id": str(player.id), "players_acknowledged": acked, "players_total": total},
+            "payload": {"player_id": str(player.id), "players_acknowledged": acked, "players_total": alive_total},
         },
     )
-    if total and acked >= total:
+    if alive_total and pending_alive == 0:
         await ws_manager.send_to_session(session.id, {"type": "all_acknowledged", "payload": {}})
         # иначе сработает таймер role_reveal и второй раз вызовет transition_to_night → duplicate phase
         await timer_service.cancel_timer(session.id, "role_reveal")
@@ -290,10 +308,18 @@ async def transition_to_night(session_id: uuid.UUID, phase_number: int):
         )
 
         # Запускаем последовательность ходов ночи (MVP: mafia -> doctor -> sheriff)
-        await execute_night_sequence(db, session, phase)
+        paused = await execute_night_sequence(db, session, phase)
+        if paused == "paused":
+            return
 
 
-async def execute_night_sequence(db: AsyncSession, session: Session, phase: GamePhase) -> None:
+async def execute_night_sequence(
+    db: AsyncSession,
+    session: Session,
+    phase: GamePhase,
+    resume_from: tuple[str, int] | None = None,
+) -> str | None:
+    """Ночная очередь. Возвращает \"paused\", если игра поставлена на паузу (resolve_night не вызывается)."""
     settings = session.settings or {}
     turn_seconds = int(settings.get("night_action_timer_seconds") or 30)
     rt = runtime_state.get(session.id)
@@ -317,10 +343,11 @@ async def execute_night_sequence(db: AsyncSession, session: Session, phase: Game
         r = role_by_id.get(p.role_id)
         return r.slug if r else None
 
-    async def _run_turn(turn_slug: str):
+    async def _run_turn(turn_slug: str, seconds_for_turn: int) -> str | None:
+        """Возвращает \"paused\" | \"aborted\" или None если ход завершён штатно."""
         rt.night_turn = turn_slug
         rt.timer_name = f"night_{turn_slug}"
-        rt.timer_seconds = turn_seconds
+        rt.timer_seconds = seconds_for_turn
         rt.timer_started_at = _now()
         rt.night_action_event.clear()
 
@@ -333,7 +360,7 @@ async def execute_night_sequence(db: AsyncSession, session: Session, phase: Game
                 "phase": {"type": "night", "number": phase.phase_number},
                 "sub_phase": None,
                 "night_turn": turn_slug,
-                "timer_seconds": turn_seconds,
+                "timer_seconds": seconds_for_turn,
                 "timer_started_at": rt.timer_started_at.isoformat(),
                 "announcement": _announcement(f"{turn_slug}_turn"),
             },
@@ -348,7 +375,7 @@ async def execute_night_sequence(db: AsyncSession, session: Session, phase: Game
                 )
             )
             if already_kill is not None:
-                return
+                return None
             actors = [p for p in alive if role_slug(p) == "mafia"]
             available_targets = [
                 {"player_id": str(p.id), "name": p.name}
@@ -356,7 +383,7 @@ async def execute_night_sequence(db: AsyncSession, session: Session, phase: Game
                 if role_slug(p) != "mafia"
             ]
             if not actors:
-                return
+                return None
             for a in actors:
                 await ws_manager.send_to_user(
                     session.id,
@@ -366,7 +393,7 @@ async def execute_night_sequence(db: AsyncSession, session: Session, phase: Game
                         "payload": {
                             "action_type": "kill",
                             "available_targets": available_targets,
-                            "timer_seconds": turn_seconds,
+                            "timer_seconds": seconds_for_turn,
                             "timer_started_at": rt.timer_started_at.isoformat(),
                             "announcement": _announcement("mafia_turn"),
                         },
@@ -375,7 +402,7 @@ async def execute_night_sequence(db: AsyncSession, session: Session, phase: Game
         else:
             actors = [p for p in alive if role_slug(p) == turn_slug]
             if not actors:
-                return
+                return None
             actor = actors[0]
             already = await db.scalar(
                 select(NightAction.id).where(
@@ -384,7 +411,7 @@ async def execute_night_sequence(db: AsyncSession, session: Session, phase: Game
                 )
             )
             if already is not None:
-                return
+                return None
             if turn_slug == "doctor":
                 available_targets = [{"player_id": str(p.id), "name": p.name} for p in alive]
                 action_type = "heal"
@@ -401,7 +428,7 @@ async def execute_night_sequence(db: AsyncSession, session: Session, phase: Game
                     "payload": {
                         "action_type": action_type,
                         "available_targets": available_targets,
-                        "timer_seconds": turn_seconds,
+                        "timer_seconds": seconds_for_turn,
                         "timer_started_at": rt.timer_started_at.isoformat(),
                         "announcement": _announcement(f"{turn_slug}_turn"),
                     },
@@ -414,20 +441,55 @@ async def execute_night_sequence(db: AsyncSession, session: Session, phase: Game
             )
             rt.night_action_event.set()
 
-        await timer_service.start_timer(session.id, rt.timer_name, turn_seconds, _timeout)
+        await timer_service.start_timer(session.id, rt.timer_name, seconds_for_turn, _timeout)
         await rt.night_action_event.wait()
         await timer_service.cancel_timer(session.id, rt.timer_name)
+        rt.night_action_event.clear()
+        if rt.night_sequence_abort:
+            return "aborted"
+        if rt.game_paused:
+            return "paused"
+        return None
 
-    # mafia -> doctor -> sheriff
-    await _run_turn("mafia")
-    await _run_turn("doctor")
-    await _run_turn("sheriff")
+    order = ["mafia", "doctor", "sheriff"]
+    start_idx = 0
+    first_seconds: int | None = None
+    if resume_from:
+        try:
+            start_idx = order.index(resume_from[0])
+        except ValueError:
+            start_idx = 0
+        first_seconds = max(1, int(resume_from[1]))
+
+    for i, turn_slug in enumerate(order[start_idx:], start=start_idx):
+        if rt.night_sequence_abort:
+            break
+        if rt.game_paused:
+            return "paused"
+        sec = first_seconds if (first_seconds is not None and i == start_idx) else turn_seconds
+        res = await _run_turn(turn_slug, sec)
+        if res == "paused":
+            return "paused"
+        if res == "aborted":
+            break
+
+    if rt.night_sequence_abort:
+        rt.night_sequence_abort = False
+
     rt.night_turn = None
     rt.timer_name = None
     rt.timer_seconds = None
     rt.timer_started_at = None
 
     await resolve_night(db, session, phase)
+    return None
+
+
+def request_night_abort(session_id: uuid.UUID) -> None:
+    """Кик во время ночи: прервать ожидание хода и дойти до resolve_night."""
+    rt = runtime_state.get(session_id)
+    rt.night_sequence_abort = True
+    rt.night_action_event.set()
 
 
 async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) -> None:
@@ -711,9 +773,82 @@ async def resolve_votes(session_id: uuid.UUID):
         await transition_to_night(session_id, phase.phase_number + 1)
 
 
+async def apply_host_kick(db: AsyncSession, session: Session, kicked: Player) -> None:
+    """Кик хостом во время активной игры: игрок выбывает, ночь может прерваться и перейти к resolve."""
+    kicked.status = "dead"
+    phase = await get_current_phase(db, session.id)
+    rt = runtime_state.get(session.id)
+
+    if phase and phase.phase_type == "day" and rt.day_sub_phase == "voting":
+        await db.execute(delete(DayVote).where(DayVote.phase_id == phase.id, DayVote.voter_player_id == kicked.id))
+
+    if phase and phase.phase_type == "night":
+        if rt.mafia_choice_by == kicked.id:
+            rt.mafia_choice_target = None
+            rt.mafia_choice_by = None
+
+    db.add(
+        GameEvent(
+            id=uuid.uuid4(),
+            session_id=session.id,
+            phase_id=phase.id if phase else None,
+            event_type="player_kicked",
+            payload={"player_id": str(kicked.id), "name": kicked.name},
+        )
+    )
+    await db.commit()
+
+    if phase and phase.phase_type == "night":
+        request_night_abort(session.id)
+        await timer_service.cancel_all(session.id)
+
+    winner = await check_win_condition(db, session.id)
+    if winner:
+        s2 = await db.get(Session, session.id)
+        if s2:
+            await finish_game(db, s2, winner)
+        return
+
+    if phase and phase.phase_type == "role_reveal":
+        ack_subq = exists(
+            select(1).where(
+                GameEvent.session_id == session.id,
+                GameEvent.phase_id == phase.id,
+                GameEvent.event_type == "role_acknowledged",
+                GameEvent.payload["player_id"].astext == cast(Player.id, String),
+            )
+        )
+        pending_alive = await db.scalar(
+            select(func.count(Player.id)).where(
+                Player.session_id == session.id,
+                Player.status == "alive",
+                ~ack_subq,
+            )
+        )
+        alive_cnt = await db.scalar(
+            select(func.count(Player.id)).where(Player.session_id == session.id, Player.status == "alive")
+        )
+        if int(alive_cnt or 0) > 0 and int(pending_alive or 0) == 0:
+            await timer_service.cancel_timer(session.id, "role_reveal")
+            await transition_to_night(session.id, 1)
+        return
+
+    if phase and phase.phase_type == "day" and rt.day_sub_phase == "voting":
+        votes_cast = await db.scalar(select(func.count(DayVote.id)).where(DayVote.phase_id == phase.id))
+        alive_cnt = await db.scalar(
+            select(func.count(Player.id)).where(Player.session_id == session.id, Player.status == "alive")
+        )
+        if int(votes_cast or 0) >= int(alive_cnt or 0) and int(alive_cnt or 0) > 0:
+            await timer_service.cancel_timer(session.id, "voting")
+            await resolve_votes(session.id)
+
+
 async def finish_game(db: AsyncSession, session: Session, winner: str) -> None:
     session.status = "finished"
     session.ended_at = _now()
+    cur = dict(session.settings or {})
+    cur.pop("game_pause", None)
+    session.settings = cur
     phase = await get_current_phase(db, session.id)
     if phase and phase.ended_at is None:
         phase.ended_at = _now()

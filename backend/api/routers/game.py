@@ -29,6 +29,11 @@ from services.state_service import restore_runtime_like_fields
 router = APIRouter()
 
 
+def _session_paused(settings: dict | None) -> bool:
+    gp = (settings or {}).get("game_pause")
+    return isinstance(gp, dict) and bool(gp.get("paused"))
+
+
 @router.post("/{session_id}/start")
 async def start(
     session_id: uuid.UUID,
@@ -54,6 +59,8 @@ async def ack_role(
     session = await db.get(Session, session_id)
     if session is None:
         raise GameError(404, "session_not_found", "Сессия не найдена")
+    if _session_paused(session.settings):
+        raise GameError(403, "game_paused", "Игра на паузе")
     if session.status != "active":
         raise GameError(403, "wrong_phase", "Действие недоступно в текущей фазе")
 
@@ -76,6 +83,8 @@ async def night_action(
     session = await db.get(Session, session_id)
     if session is None:
         raise GameError(404, "session_not_found", "Сессия не найдена")
+    if _session_paused(session.settings):
+        raise GameError(403, "game_paused", "Игра на паузе")
 
     player = await db.scalar(
         select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
@@ -204,6 +213,8 @@ async def vote(
     session = await db.get(Session, session_id)
     if session is None:
         raise GameError(404, "session_not_found", "Сессия не найдена")
+    if _session_paused(session.settings):
+        raise GameError(403, "game_paused", "Игра на паузе")
     player = await db.scalar(
         select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
     )
@@ -294,8 +305,13 @@ async def state(
 
     all_players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
 
+    paused = _session_paused(session.settings)
+    if paused:
+        rt.game_paused = True
+
     response = {
         "session_status": session.status,
+        "game_paused": paused,
         "phase": {
             "id": str(phase.id) if phase else None,
             "type": phase.phase_type if phase else None,
