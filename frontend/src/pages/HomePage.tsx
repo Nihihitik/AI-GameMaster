@@ -3,29 +3,86 @@ import { useNavigate } from 'react-router-dom';
 import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
-import { useSessionStore } from '../stores/sessionStore';
+import Stepper from '../components/ui/Stepper';
+import Slider from '../components/ui/Slider';
+import { useSessionStore, MIN_PLAYERS, MAX_PLAYERS, getSpecialRolesCount, getCiviliansCount } from '../stores/sessionStore';
+import { useAuthStore } from '../stores/authStore';
+import { SessionSettings, RoleConfig } from '../types/game';
 import './HomePage.scss';
+
+const DEFAULT_CREATE_SETTINGS: SessionSettings = {
+  role_reveal_timer_seconds: 15,
+  discussion_timer_seconds: 120,
+  voting_timer_seconds: 60,
+  night_action_timer_seconds: 30,
+  role_config: {
+    mafia: 1,
+    don: 0,
+    sheriff: 1,
+    doctor: 1,
+    lover: 0,
+    maniac: 0,
+  },
+};
 
 export default function HomePage() {
   const [showJoinModal, setShowJoinModal] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
   const [joinCode, setJoinCode] = useState('');
   const [joinName, setJoinName] = useState('');
   const [joinError, setJoinError] = useState('');
   const [joinStep, setJoinStep] = useState<'code' | 'name'>('code');
+  const [creating, setCreating] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const [createError, setCreateError] = useState('');
 
+  const [playerCount, setPlayerCount] = useState(8);
+  const [createSettings, setCreateSettings] = useState<SessionSettings>(DEFAULT_CREATE_SETTINGS);
+  const [hostName, setHostName] = useState('');
+
+  const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
-  const createSession = useSessionStore((s) => s.createSession);
-  const joinSession = useSessionStore((s) => s.joinSession);
 
-  const handleCreateSession = () => {
-    createSession();
-    const code = useSessionStore.getState().session?.code;
-    if (code) {
+  const specialCount = getSpecialRolesCount(createSettings.role_config);
+  const civiliansCount = getCiviliansCount(playerCount, createSettings.role_config);
+
+  const updateRoleConfig = (key: keyof RoleConfig, value: number) => {
+    setCreateSettings((s) => ({
+      ...s,
+      role_config: { ...s.role_config, [key]: value },
+    }));
+  };
+
+  const handleOpenCreate = () => {
+    setCreateError('');
+    setHostName(user?.nickname ?? '');
+    setShowCreateModal(true);
+  };
+
+  const handleConfirmCreate = async () => {
+    if (specialCount > playerCount) {
+      setCreateError('Специальных ролей больше, чем игроков');
+      return;
+    }
+    setCreating(true);
+    setCreateError('');
+    try {
+      const trimmedHostName = hostName.trim();
+      const code = await useSessionStore.getState().createSession({
+        player_count: playerCount,
+        settings: createSettings,
+        host_name: trimmedHostName || undefined,
+      });
+      setShowCreateModal(false);
       navigate(`/sessions/${code}`);
+    } catch (err: any) {
+      setCreateError(err?.message || 'Не удалось создать сессию');
+    } finally {
+      setCreating(false);
     }
   };
 
-  const handleJoinSubmit = () => {
+  const handleJoinSubmit = async () => {
     if (joinStep === 'code') {
       if (joinCode.trim().length < 4) {
         setJoinError('Введите корректный код сессии');
@@ -41,13 +98,22 @@ export default function HomePage() {
       return;
     }
 
-    joinSession(joinCode.trim().toUpperCase(), joinName.trim());
-    setShowJoinModal(false);
-    setJoinCode('');
-    setJoinName('');
-    setJoinStep('code');
+    const normalizedCode = joinCode.trim().toUpperCase();
+    setJoining(true);
     setJoinError('');
-    navigate(`/sessions/${joinCode.trim().toUpperCase()}`);
+    try {
+      await useSessionStore.getState().joinSession(normalizedCode, joinName.trim());
+      setShowJoinModal(false);
+      setJoinCode('');
+      setJoinName('');
+      setJoinStep('code');
+      setJoinError('');
+      navigate(`/sessions/${normalizedCode}`);
+    } catch (err: any) {
+      setJoinError(err?.message || 'Не удалось присоединиться');
+    } finally {
+      setJoining(false);
+    }
   };
 
   const handleCloseJoinModal = () => {
@@ -56,6 +122,11 @@ export default function HomePage() {
     setJoinName('');
     setJoinStep('code');
     setJoinError('');
+  };
+
+  const handleCloseCreateModal = () => {
+    setShowCreateModal(false);
+    setCreateError('');
   };
 
   return (
@@ -90,7 +161,7 @@ export default function HomePage() {
         </div>
 
         <div className="home-actions">
-          <Button onClick={handleCreateSession}>Создать сессию</Button>
+          <Button onClick={handleOpenCreate}>Создать сессию</Button>
           <div className="home-actions__spacer" />
           <button className="home-join-btn" onClick={() => setShowJoinModal(true)}>
             <span className="home-join-btn__glow" />
@@ -129,8 +200,102 @@ export default function HomePage() {
             </div>
           )}
           <div className="join-modal__actions">
-            <Button onClick={handleJoinSubmit}>
-              {joinStep === 'code' ? 'Далее' : 'Присоединиться'}
+            <Button onClick={handleJoinSubmit} disabled={joining}>
+              {joining ? 'Загрузка...' : joinStep === 'code' ? 'Далее' : 'Присоединиться'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showCreateModal}
+        onClose={handleCloseCreateModal}
+        title="Создать сессию"
+      >
+        <div className="create-modal">
+          <div className="create-modal__section">
+            <h4 className="create-modal__section-title">Твоё имя в игре</h4>
+            <Input
+              label="Имя игрока"
+              value={hostName}
+              onChange={setHostName}
+            />
+          </div>
+
+          <div className="create-modal__section">
+            <h4 className="create-modal__section-title">Игроки</h4>
+            <Slider
+              label="Количество игроков"
+              value={playerCount}
+              min={MIN_PLAYERS}
+              max={MAX_PLAYERS}
+              step={1}
+              onChange={setPlayerCount}
+            />
+          </div>
+
+          <div className="create-modal__section">
+            <h4 className="create-modal__section-title">Таймеры</h4>
+            <Slider
+              label="Обсуждение"
+              value={createSettings.discussion_timer_seconds}
+              min={30}
+              max={300}
+              step={10}
+              onChange={(v) => setCreateSettings((s) => ({ ...s, discussion_timer_seconds: v }))}
+            />
+            <Slider
+              label="Голосование"
+              value={createSettings.voting_timer_seconds}
+              min={15}
+              max={120}
+              step={5}
+              onChange={(v) => setCreateSettings((s) => ({ ...s, voting_timer_seconds: v }))}
+            />
+            <Slider
+              label="Ночные действия"
+              value={createSettings.night_action_timer_seconds}
+              min={15}
+              max={60}
+              step={5}
+              onChange={(v) => setCreateSettings((s) => ({ ...s, night_action_timer_seconds: v }))}
+            />
+            <Slider
+              label="Ознакомление с ролью"
+              value={createSettings.role_reveal_timer_seconds}
+              min={10}
+              max={30}
+              step={1}
+              onChange={(v) => setCreateSettings((s) => ({ ...s, role_reveal_timer_seconds: v }))}
+            />
+          </div>
+
+          <div className="create-modal__section">
+            <h4 className="create-modal__section-title">Роли</h4>
+            <Stepper label="Мафия" value={createSettings.role_config.mafia} min={0} max={2}
+              onChange={(v) => updateRoleConfig('mafia', v)} />
+            <Stepper label="Дон Мафии" value={createSettings.role_config.don} min={0} max={1}
+              onChange={(v) => updateRoleConfig('don', v)} />
+            <Stepper label="Шериф" value={createSettings.role_config.sheriff} min={0} max={1}
+              onChange={(v) => updateRoleConfig('sheriff', v)} />
+            <Stepper label="Доктор" value={createSettings.role_config.doctor} min={0} max={1}
+              onChange={(v) => updateRoleConfig('doctor', v)} />
+            <Stepper label="Любовница" value={createSettings.role_config.lover} min={0} max={1}
+              onChange={(v) => updateRoleConfig('lover', v)} />
+            <Stepper label="Маньяк" value={createSettings.role_config.maniac} min={0} max={1}
+              onChange={(v) => updateRoleConfig('maniac', v)} />
+
+            <div className="create-modal__civilians">
+              <span>Мирные жители</span>
+              <span>{civiliansCount}</span>
+            </div>
+          </div>
+
+          {createError && <div className="create-modal__error">{createError}</div>}
+
+          <div className="create-modal__actions">
+            <Button onClick={handleConfirmCreate} disabled={creating}>
+              {creating ? 'Создание...' : 'Создать'}
             </Button>
           </div>
         </div>

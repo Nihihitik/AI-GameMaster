@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
-import { roleImages } from '../../mocks/gameMocks';
+import { getRoleInfo, CARD_BACK_IMAGE } from '../../utils/roles';
 import './FinaleScreen.scss';
 
 export default function FinaleScreen() {
@@ -13,11 +13,14 @@ export default function FinaleScreen() {
 
   if (!result) return null;
 
-  const isCityWin = result.winner === 'city';
-  const winnerLabel = result.winner === 'city'
-    ? 'Победа мирных!'
-    : result.winner === 'mafia'
-      ? 'Победа мафии!'
+  const winner = result.winner;
+  const isCityWin = winner === 'city';
+  const winnerLabel =
+    winner === 'city' ? 'Победа мирных!'
+    : winner === 'mafia' ? 'Победа мафии!'
+    : winner === 'maniac' ? 'Победа маньяка!'
+    : winner
+      ? `Победа: ${winner}`
       : 'Ничья';
 
   const handleGoHome = () => {
@@ -47,39 +50,46 @@ export default function FinaleScreen() {
         </div>
 
         <h1 className="finale__title">{winnerLabel}</h1>
-        <p className="finale__announcement">{result.announcement.text}</p>
+        {result.announcement?.text && (
+          <p className="finale__announcement">{result.announcement.text}</p>
+        )}
 
         <div className="finale__players">
           <h3 className="finale__players-title">Все роли</h3>
           <div className="finale__players-grid">
-            {result.players.map((player) => (
-              <div
-                key={player.id}
-                className={`finale__player ${player.status === 'dead' ? 'finale__player--dead' : ''} ${player.role.team === 'mafia' ? 'finale__player--mafia' : 'finale__player--city'}`}
-              >
-                <div className="finale__player-avatar">
-                  <img
-                    src={roleImages[player.role.name] || '/img/Obratnaya_storona_karty.png'}
-                    alt={player.role.name}
-                    className="finale__player-avatar-img"
-                  />
-                  {player.status === 'dead' && (
-                    <div className="finale__player-dead-overlay">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <line x1="18" y1="6" x2="6" y2="18" />
-                        <line x1="6" y1="6" x2="18" y2="18" />
-                      </svg>
-                    </div>
-                  )}
+            {(result.players || []).map((player) => {
+              const info = getRoleInfo(player.role);
+              const displayName = info?.displayName ?? player.role?.name ?? '—';
+              const team = info?.team ?? player.role?.team ?? 'city';
+              return (
+                <div
+                  key={player.id}
+                  className={`finale__player ${player.status === 'dead' ? 'finale__player--dead' : ''} ${team === 'mafia' ? 'finale__player--mafia' : 'finale__player--city'}`}
+                >
+                  <div className="finale__player-avatar">
+                    <img
+                      src={info?.image ?? CARD_BACK_IMAGE}
+                      alt={displayName}
+                      className="finale__player-avatar-img"
+                    />
+                    {player.status === 'dead' && (
+                      <div className="finale__player-dead-overlay">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <line x1="18" y1="6" x2="6" y2="18" />
+                          <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                  <div className="finale__player-info">
+                    <span className="finale__player-name">{player.name}</span>
+                    <span className={`finale__player-role ${team === 'mafia' ? 'finale__player-role--mafia' : ''}`}>
+                      {displayName}
+                    </span>
+                  </div>
                 </div>
-                <div className="finale__player-info">
-                  <span className="finale__player-name">{player.name}</span>
-                  <span className={`finale__player-role ${player.role.team === 'mafia' ? 'finale__player-role--mafia' : ''}`}>
-                    {player.role.name}
-                  </span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

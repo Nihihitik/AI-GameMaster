@@ -47,14 +47,16 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # CORS_ORIGINS приходит как JSON-строка или как CSV.
-    CORS_ORIGINS: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    # Храним в виде строки, чтобы pydantic-settings не пытался парсить JSON
+    # (list[str] заставляет его всегда звать json.loads). Превращаем в список
+    # через свойство `cors_origins`.
+    CORS_ORIGINS: str = Field(default="http://localhost:5173")
 
     # Режим отладки (включает логирование SQL-запросов)
     DEBUG: bool = False
 
     @property
     def cors_origins(self) -> list[str]:
-        # оставляем обратную совместимость: если кто-то задал строкой
         return _parse_json_list(self.CORS_ORIGINS)
 
 

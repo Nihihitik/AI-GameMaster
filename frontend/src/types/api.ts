@@ -1,10 +1,23 @@
-import { Session, SessionSettings, LobbyPlayer, Phase, MyPlayer, Player, RoleRevealInfo, Target, VoteInfo, GameResult } from './game';
+import {
+  Session,
+  SessionSettings,
+  LobbyPlayer,
+  Phase,
+  MyPlayer,
+  Player,
+  RoleRevealInfo,
+  Target,
+  VoteInfo,
+  GameResult,
+  RoleConfig,
+} from './game';
 
 // ---- Auth ----
 
 export interface RegisterRequest {
   email: string;
   password: string;
+  nickname: string;
 }
 
 export interface LoginRequest {
@@ -15,6 +28,7 @@ export interface LoginRequest {
 export interface AuthResponse {
   user_id: string;
   email: string;
+  nickname: string;
   access_token: string;
   refresh_token: string;
 }
@@ -31,6 +45,7 @@ export interface RefreshResponse {
 export interface UserProfile {
   user_id: string;
   email: string;
+  nickname: string;
   has_pro: boolean;
   created_at: string;
 }
@@ -39,21 +54,44 @@ export interface LogoutRequest {
   refresh_token: string;
 }
 
+export interface UpdateNicknameRequest {
+  nickname: string;
+}
+
+export interface DeleteAccountRequest {
+  password: string;
+}
+
 // ---- Sessions ----
 
 export interface CreateSessionRequest {
   player_count: number;
   settings: SessionSettings;
+  host_name?: string;
 }
 
+export interface SessionResponse extends Session {}
+
+/** alias для обратной совместимости с старыми импортами */
 export interface CreateSessionResponse extends Session {}
 
-export interface GetSessionResponse extends Session {
-  players: LobbyPlayer[];
+export interface PlayerInList {
+  id: string;
+  name: string;
+  join_order: number;
+  is_host: boolean;
+  is_me: boolean;
 }
 
+export interface SessionDetailResponse extends Session {
+  players: PlayerInList[];
+}
+
+/** alias — некоторые файлы импортируют это имя */
+export interface GetSessionResponse extends SessionDetailResponse {}
+
 export interface JoinSessionRequest {
-  name: string;
+  name?: string | null;
 }
 
 export interface JoinSessionResponse {
@@ -63,7 +101,7 @@ export interface JoinSessionResponse {
 }
 
 export interface GetPlayersResponse {
-  players: LobbyPlayer[];
+  players: PlayerInList[];
 }
 
 export interface UpdateSettingsRequest {
@@ -71,11 +109,7 @@ export interface UpdateSettingsRequest {
   discussion_timer_seconds?: number;
   voting_timer_seconds?: number;
   night_action_timer_seconds?: number;
-  role_config?: {
-    mafia: number;
-    sheriff: number;
-    doctor: number;
-  };
+  role_config?: Partial<RoleConfig>;
 }
 
 export interface UpdateSettingsResponse {
@@ -92,17 +126,31 @@ export interface StartSessionResponse {
 
 // ---- Game ----
 
+/** Тип ночного/дневного действия. Голосование — виртуальное значение для UI. */
+export type ActionType =
+  | 'kill'
+  | 'check'
+  | 'heal'
+  | 'don_check'
+  | 'lover_visit'
+  | 'maniac_kill'
+  | 'vote';
+
 export interface GameStateResponse {
   session_status: 'active' | 'finished';
+  game_paused: boolean;
   phase: Phase;
-  my_player: MyPlayer;
+  my_player: MyPlayer & {
+    is_blocked_tonight?: boolean;
+  };
   players: Player[];
   role_reveal: RoleRevealInfo | null;
   awaiting_action: boolean;
-  action_type: 'kill' | 'check' | 'heal' | 'vote' | null;
+  action_type: Exclude<ActionType, 'vote'> | null;
   available_targets: Target[] | null;
   my_action_submitted: boolean;
   votes: VoteInfo | null;
+  day_blocked_player?: string | null;
   result: GameResult | null;
 }
 
@@ -116,13 +164,20 @@ export interface NightActionRequest {
   target_player_id: string;
 }
 
+export interface NightActionCheckResult {
+  /** для обычной проверки шерифа */
+  team?: 'mafia' | 'city' | 'maniac';
+  /** для проверки дона — true, если цель шериф */
+  is_sheriff?: boolean;
+  /** альтернативный короткий формат для дона */
+  match?: boolean;
+}
+
 export interface NightActionResponse {
-  action_type: 'kill' | 'check' | 'heal';
+  action_type: 'kill' | 'check' | 'heal' | 'don_check' | 'lover_visit' | 'maniac_kill';
   target_player_id: string;
   confirmed: true;
-  check_result?: {
-    team: 'mafia' | 'city';
-  };
+  check_result?: NightActionCheckResult;
 }
 
 export interface VoteRequest {
@@ -145,4 +200,28 @@ export interface RematchResponse {
   code: string;
   status: 'waiting' | 'active';
   players_kept: number;
+}
+
+// ---- Subscriptions ----
+
+export type SubscriptionPlan = 'free' | 'pro';
+export type SubscriptionStatus = 'active' | 'cancelled' | 'expired' | 'none';
+
+export interface SubscriptionStatusResponse {
+  plan: SubscriptionPlan;
+  status: SubscriptionStatus;
+  period_end: string | null;
+  cancel_at_period_end: boolean;
+}
+
+export interface CreateSubscriptionRequest {
+  plan: 'pro';
+}
+
+export interface CreateSubscriptionResponse {
+  subscription_id: string;
+  plan: SubscriptionPlan;
+  status: SubscriptionStatus;
+  period_start: string;
+  period_end: string;
 }

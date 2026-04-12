@@ -11,7 +11,7 @@ class SessionRuntime:
     # day subphase: "discussion" | "voting" | None
     day_sub_phase: str | None = None
 
-    # night turn: "mafia" | "doctor" | "sheriff" | None
+    # night turn: "lover" | "mafia" | "don" | "sheriff" | "doctor" | "maniac" | None
     night_turn: str | None = None
 
     # current timer metadata for state endpoint
@@ -25,6 +25,21 @@ class SessionRuntime:
     # mafia: first choice wins (store target player_id)
     mafia_choice_target: uuid.UUID | None = None
     mafia_choice_by: uuid.UUID | None = None  # actor_player_id
+
+    # maniac: отдельный от мафии убийца, работает параллельно
+    maniac_choice_target: uuid.UUID | None = None
+
+    # доктор: ограничения на цели
+    doctor_last_heal: uuid.UUID | None = None  # последняя успешно вылеченная цель
+    doctor_self_heals: int = 0  # сколько раз доктор лечил себя (лимит 1 за игру)
+
+    # любовница: цель последней ночи и игроки, заблокированные этой ночью
+    lover_last_target: uuid.UUID | None = None
+    blocked_tonight: set[uuid.UUID] = field(default_factory=set)
+
+    # кого заблокировала любовница прошлой ночью — игрок не может голосовать днём.
+    # Сбрасывается после перехода в следующую ночь.
+    day_blocked_player: uuid.UUID | None = None
 
     # background task marker (чтобы не запускать несколько recovery/sequence параллельно)
     night_sequence_running: bool = False

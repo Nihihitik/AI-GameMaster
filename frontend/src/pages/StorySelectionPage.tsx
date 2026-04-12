@@ -22,13 +22,13 @@ export default function StorySelectionPage() {
   const [timeLeft, setTimeLeft] = useState(60);
 
   const session = useSessionStore((s) => s.session);
-  const totalPlayers = useSessionStore((s) => s.totalPlayers);
+  const players = useSessionStore((s) => s.players);
   const timerPaused = useSessionStore((s) => s.timerPaused);
   const setTimerPaused = useSessionStore((s) => s.setTimerPaused);
   const setSelectedStory = useSessionStore((s) => s.setSelectedStory);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const total = totalPlayers || 8;
+  const total = players.length || 8;
 
   useEffect(() => {
     if (phase !== 'voting' || timerPaused) {
@@ -136,7 +136,11 @@ export default function StorySelectionPage() {
     if (winnerStory) {
       setSelectedStory(winnerStory.id);
     }
-    navigate(`/game/${session?.id || 'mock'}`);
+    if (session?.id) {
+      navigate(`/game/${session.id}`);
+    } else {
+      navigate('/', { replace: true });
+    }
   };
 
   const togglePause = useCallback(() => {

@@ -117,13 +117,33 @@ async def night_action(
     if not action_type:
         raise GameError(403, "wrong_phase", "Действие недоступно в текущей фазе")
 
-    # ограничения
-    if action_type in ("kill", "check") and target.id == player.id:
+    rt = runtime_state.get(session_id)
+
+    # Игрок, заблокированный любовницей, не может совершать ночные действия.
+    if player.id in rt.blocked_tonight:
+        raise GameError(403, "blocked_by_lover", "Вы заблокированы этой ночью")
+
+    # ---- ограничения по типу действия
+    # "kill" / "check" / "maniac_kill" / "lover_visit" / "don_check" — нельзя выбирать себя
+    if action_type in ("kill", "check", "maniac_kill", "lover_visit", "don_check") and target.id == player.id:
         raise GameError(400, "invalid_target", "Нельзя выбрать себя")
+
+    # "kill": нельзя атаковать мафию (и дона)
     if action_type == "kill":
         target_role = await db.get(Role, target.role_id) if target.role_id else None
         if target_role and target_role.team == "mafia":
             raise GameError(400, "invalid_target", "Нельзя атаковать мафию")
+
+    # "don_check": нельзя проверять мафию/дона
+    if action_type == "don_check":
+        target_role = await db.get(Role, target.role_id) if target.role_id else None
+        if target_role and target_role.team == "mafia":
+            raise GameError(400, "invalid_target", "Нельзя проверять мафию")
+
+    # "lover_visit": нельзя повторять цель две ночи подряд
+    if action_type == "lover_visit":
+        if rt.lover_last_target is not None and rt.lover_last_target == target.id:
+            raise GameError(400, "invalid_target", "Нельзя посещать одного и того же игрока две ночи подряд")
 
     already = await db.scalar(
         select(NightAction.id).where(NightAction.phase_id == phase.id, NightAction.actor_player_id == player.id)
@@ -171,13 +191,21 @@ async def night_action(
                 raise GameError(400, "invalid_target", "Себя доктор может вылечить только один раз за игру")
 
     # мафия: первый выбор фиксирует общий
-    rt = runtime_state.get(session_id)
     if action_type == "kill":
         if rt.mafia_choice_target is not None:
             # кто-то уже выбрал
             raise GameError(409, "action_already_submitted", "Выбор мафии уже сделан")
         rt.mafia_choice_target = target.id
         rt.mafia_choice_by = player.id
+
+    # маньяк: сохраняем цель в runtime для резолвера
+    if action_type == "maniac_kill":
+        rt.maniac_choice_target = target.id
+
+    # любовница: блокируем на ночь себя и цель
+    if action_type == "lover_visit":
+        rt.blocked_tonight.add(player.id)
+        rt.blocked_tonight.add(target.id)
 
     na = NightAction(
         id=uuid.uuid4(),
@@ -191,15 +219,38 @@ async def night_action(
     await db.commit()
 
     # WS подтверждение
-    await ws_manager.send_to_user(session_id, current_user.id, {"type": "action_confirmed", "payload": {"action_type": action_type}})
+    await ws_manager.send_to_user(
+        session_id,
+        current_user.id,
+        {"type": "action_confirmed", "payload": {"action_type": action_type}},
+    )
     rt.night_action_event.set()
 
     resp = {"action_type": action_type, "target_player_id": str(target.id), "confirmed": True}
+
     if action_type == "check":
         target_role = await db.get(Role, target.role_id) if target.role_id else None
         team = target_role.team if target_role else "city"
         resp["check_result"] = {"team": team}
-        await ws_manager.send_to_user(session_id, current_user.id, {"type": "check_result", "payload": {"target_player_id": str(target.id), "team": team}})
+        await ws_manager.send_to_user(
+            session_id,
+            current_user.id,
+            {"type": "check_result", "payload": {"target_player_id": str(target.id), "team": team}},
+        )
+
+    if action_type == "don_check":
+        target_role = await db.get(Role, target.role_id) if target.role_id else None
+        is_sheriff = bool(target_role and target_role.team == "city" and target_role.slug == "sheriff")
+        resp["check_result"] = {"is_sheriff": is_sheriff}
+        await ws_manager.send_to_user(
+            session_id,
+            current_user.id,
+            {
+                "type": "check_result",
+                "payload": {"target_player_id": str(target.id), "is_sheriff": is_sheriff},
+            },
+        )
+
     return resp
 
 
@@ -229,6 +280,10 @@ async def vote(
     rt = runtime_state.get(session_id)
     if rt.day_sub_phase != "voting":
         raise GameError(403, "wrong_phase", "Действие недоступно в текущей фазе")
+
+    # Игрок, которого посещала любовница прошлой ночью, не может голосовать.
+    if rt.day_blocked_player is not None and rt.day_blocked_player == player.id:
+        raise GameError(403, "blocked_by_lover", "Вы заблокированы после визита любовницы")
 
     already = await db.scalar(
         select(DayVote.id).where(DayVote.phase_id == phase.id, DayVote.voter_player_id == player.id)
@@ -309,6 +364,12 @@ async def state(
     if paused:
         rt.game_paused = True
 
+    is_blocked_tonight = (
+        phase is not None
+        and phase.phase_type == "night"
+        and player.id in rt.blocked_tonight
+    )
+
     response = {
         "session_status": session.status,
         "game_paused": paused,
@@ -327,10 +388,11 @@ async def state(
             "name": player.name,
             "status": player.status,
             "role": (
-                {"name": role.name, "team": role.team, "abilities": role.abilities}
+                {"slug": role.slug, "name": role.name, "team": role.team, "abilities": role.abilities}
                 if role
-                else {"name": None, "team": None, "abilities": {}}
+                else {"slug": None, "name": None, "team": None, "abilities": {}}
             ),
+            "is_blocked_tonight": is_blocked_tonight,
         },
         "players": [
             {"id": str(p.id), "name": p.name, "status": p.status, "join_order": p.join_order}
@@ -341,6 +403,11 @@ async def state(
         "available_targets": [],
         "my_action_submitted": False,
     }
+
+    if phase and phase.phase_type == "day":
+        response["day_blocked_player"] = (
+            str(rt.day_blocked_player) if rt.day_blocked_player else None
+        )
 
     if phase and phase.phase_type == "role_reveal":
         from sqlalchemy import func
@@ -372,25 +439,57 @@ async def state(
         night_action = (role.abilities or {}).get("night_action")
         if night_action:
             response["action_type"] = night_action
-            response["awaiting_action"] = True
+            # Если заблокирован любовницей — действие недоступно.
+            response["awaiting_action"] = not is_blocked_tonight
+
+            # Подтянем роли остальных один раз, чтобы фильтровать мафию и т.п.
+            other_role_ids = {p.role_id for p in all_players if p.role_id}
+            roles_db = (
+                (await db.scalars(select(Role).where(Role.id.in_(other_role_ids)))).all()
+                if other_role_ids
+                else []
+            )
+            roles_by_id = {r.id: r for r in roles_db}
+
+            def _team_of(p: Player) -> str | None:
+                if not p.role_id:
+                    return None
+                r = roles_by_id.get(p.role_id)
+                return r.team if r else None
+
             if night_action == "kill":
-                # цели: живые city
-                targets = []
-                for p in all_players:
-                    if p.status != "alive":
-                        continue
-                    if p.id == player.id:
-                        continue
-                    pr = await db.get(Role, p.role_id) if p.role_id else None
-                    if pr and pr.team == "mafia":
-                        continue
-                    targets.append({"player_id": str(p.id), "name": p.name})
-                response["available_targets"] = targets
+                response["available_targets"] = [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in all_players
+                    if p.status == "alive" and p.id != player.id and _team_of(p) != "mafia"
+                ]
             elif night_action == "heal":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name} for p in all_players if p.status == "alive"
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in all_players
+                    if p.status == "alive"
                 ]
             elif night_action == "check":
+                response["available_targets"] = [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in all_players
+                    if p.status == "alive" and p.id != player.id
+                ]
+            elif night_action == "don_check":
+                response["available_targets"] = [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in all_players
+                    if p.status == "alive" and p.id != player.id and _team_of(p) != "mafia"
+                ]
+            elif night_action == "lover_visit":
+                response["available_targets"] = [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in all_players
+                    if p.status == "alive"
+                    and p.id != player.id
+                    and p.id != rt.lover_last_target
+                ]
+            elif night_action == "maniac_kill":
                 response["available_targets"] = [
                     {"player_id": str(p.id), "name": p.name}
                     for p in all_players

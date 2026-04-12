@@ -71,6 +71,14 @@ async def get_current_phase(db: AsyncSession, session_id: uuid.UUID) -> GamePhas
 
 
 async def check_win_condition(db: AsyncSession, session_id: uuid.UUID) -> str | None:
+    """Проверка условий победы.
+
+    Приоритет (порядок важен):
+      1. Маньяк: жив ровно один маньяк и суммарно город+мафия <= 1.
+      2. Мафия: маньяков нет, живой мафии >= живого города.
+      3. Город: нет ни мафии, ни маньяков.
+      Иначе — игра продолжается.
+    """
     alive = (await db.scalars(select(Player).where(Player.session_id == session_id, Player.status == "alive"))).all()
     if not alive:
         return None
@@ -79,12 +87,21 @@ async def check_win_condition(db: AsyncSession, session_id: uuid.UUID) -> str | 
         return None
     roles = (await db.scalars(select(Role).where(Role.id.in_(role_ids)))).all()
     role_by_id = {r.id: r for r in roles}
+
     alive_mafia = sum(1 for p in alive if p.role_id and role_by_id[p.role_id].team == "mafia")
     alive_city = sum(1 for p in alive if p.role_id and role_by_id[p.role_id].team == "city")
-    if alive_mafia == 0:
+    alive_maniac = sum(1 for p in alive if p.role_id and role_by_id[p.role_id].team == "maniac")
+
+    # Маньяк остался в живых один против одного (или меньше).
+    if alive_maniac == 1 and (alive_city + alive_mafia) <= 1:
+        return "maniac"
+
+    # Маньяков больше нет — обычная механика мафия vs город.
+    if alive_maniac == 0 and alive_mafia == 0:
         return "city"
-    if alive_mafia >= alive_city:
+    if alive_maniac == 0 and alive_mafia >= alive_city:
         return "mafia"
+
     return None
 
 
@@ -95,27 +112,38 @@ async def start_game(db: AsyncSession, session: Session) -> None:
     players = (await db.scalars(select(Player).where(Player.session_id == session.id))).all()
     role_cfg = (session.settings or {}).get("role_config") or {}
     mafia = int(role_cfg.get("mafia", 0))
+    don = int(role_cfg.get("don", 0))
     sheriff = int(role_cfg.get("sheriff", 0))
     doctor = int(role_cfg.get("doctor", 0))
+    lover = int(role_cfg.get("lover", 0))
+    maniac = int(role_cfg.get("maniac", 0))
     civilian = int(role_cfg.get("civilian", 0))
 
-    if len(players) < mafia + sheriff + doctor + civilian:
+    total_special = mafia + don + sheriff + doctor + lover + maniac + civilian
+    if len(players) < total_special:
         raise GameError(400, "insufficient_players", "Недостаточно игроков для выбранной конфигурации")
 
-    if mafia >= (len(players) - mafia):
+    mafia_count = mafia + don
+    # city_count (для валидации баланса): все кроме мафии и маньяков.
+    city_count = len(players) - mafia_count - maniac
+    if mafia_count >= city_count:
         raise GameError(400, "invalid_role_config", "Мафия должна быть строго меньше города")
 
-    roles = (await db.scalars(select(Role).where(Role.slug.in_(["mafia", "sheriff", "doctor", "civilian"])))).all()
+    required_slugs = ["mafia", "don", "sheriff", "doctor", "lover", "maniac", "civilian"]
+    roles = (await db.scalars(select(Role).where(Role.slug.in_(required_slugs)))).all()
     role_by_slug = {r.slug: r for r in roles}
-    missing = [s for s in ["mafia", "sheriff", "doctor", "civilian"] if s not in role_by_slug]
+    missing = [s for s in required_slugs if s not in role_by_slug]
     if missing:
         raise GameError(500, "internal_error", f"Не хватает ролей в БД: {', '.join(missing)}")
 
     role_pool = (
         ["mafia"] * mafia
+        + ["don"] * don
         + ["sheriff"] * sheriff
         + ["doctor"] * doctor
-        + ["civilian"] * (len(players) - mafia - sheriff - doctor)
+        + ["lover"] * lover
+        + ["maniac"] * maniac
+        + ["civilian"] * (len(players) - mafia - don - sheriff - doctor - lover - maniac)
     )
     random.shuffle(role_pool)
     for p, slug in zip(players, role_pool, strict=False):
@@ -163,7 +191,7 @@ async def start_game(db: AsyncSession, session: Session) -> None:
         await ws_manager.send_to_user(
             session.id,
             p.user_id,
-            {"type": "role_assigned", "payload": {"role": {"name": r.name, "team": r.team, "abilities": r.abilities}}},
+            {"type": "role_assigned", "payload": {"role": {"slug": r.slug, "name": r.name, "team": r.team, "abilities": r.abilities}}},
         )
 
     async def _on_role_reveal_timeout():
@@ -242,7 +270,7 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
         await timer_service.cancel_timer(session.id, "role_reveal")
         await transition_to_night(session.id, 1)
 
-    return {"acknowledged": True, "players_acknowledged": acked, "players_total": total}
+    return {"acknowledged": True, "players_acknowledged": acked, "players_total": alive_total}
 
 
 async def transition_to_night(session_id: uuid.UUID, phase_number: int):
@@ -265,6 +293,15 @@ async def transition_to_night(session_id: uuid.UUID, phase_number: int):
         if current and current.ended_at is None:
             current.ended_at = _now()
 
+        # Свежий вход в ночь: сбрасываем блокировки и фиксируем
+        # цели мафии/маньяка для новой ночи.
+        rt = runtime_state.get(session_id)
+        rt.blocked_tonight = set()
+        rt.day_blocked_player = None
+        rt.mafia_choice_target = None
+        rt.mafia_choice_by = None
+        rt.maniac_choice_target = None
+
         phase = GamePhase(
             id=uuid.uuid4(),
             session_id=session_id,
@@ -283,10 +320,11 @@ async def transition_to_night(session_id: uuid.UUID, phase_number: int):
                 {
                     "phase": {"type": "night", "number": phase_number},
                     "sub_phase": None,
-                    "night_turn": "mafia",
+                    "night_turn": "lover",
                     "timer_seconds": int((session.settings or {}).get("night_action_timer_seconds") or 30),
                     "timer_started_at": _now().isoformat(),
                     "announcement": _announcement("night_start"),
+                    "blocked_tonight": [],
                 },
             )
         except IntegrityError:
@@ -307,7 +345,8 @@ async def transition_to_night(session_id: uuid.UUID, phase_number: int):
             },
         )
 
-        # Запускаем последовательность ходов ночи (MVP: mafia -> doctor -> sheriff)
+        # Запускаем последовательность ходов ночи:
+        # lover -> mafia -> don -> sheriff -> doctor -> maniac
         paused = await execute_night_sequence(db, session, phase)
         if paused == "paused":
             return
@@ -319,10 +358,18 @@ async def execute_night_sequence(
     phase: GamePhase,
     resume_from: tuple[str, int] | None = None,
 ) -> str | None:
-    """Ночная очередь. Возвращает \"paused\", если игра поставлена на паузу (resolve_night не вызывается)."""
+    """Ночная очередь. Возвращает \"paused\", если игра поставлена на паузу (resolve_night не вызывается).
+
+    Очередь: lover -> mafia -> don -> sheriff -> doctor -> maniac.
+    Роли, которых нет в игре или актёры мертвы, — пропускаются.
+    Игроки, заблокированные любовницей, тоже пропускаются (ход выдаётся, действие — no-op).
+    """
     settings = session.settings or {}
     turn_seconds = int(settings.get("night_action_timer_seconds") or 30)
     rt = runtime_state.get(session.id)
+
+    # При recovery мы не трогаем runtime — его уже восстановили из game_events
+    # перед вызовом. При свежем входе в ночь runtime сброшен в `transition_to_night`.
 
     players = (
         await db.scalars(
@@ -363,10 +410,11 @@ async def execute_night_sequence(
                 "timer_seconds": seconds_for_turn,
                 "timer_started_at": rt.timer_started_at.isoformat(),
                 "announcement": _announcement(f"{turn_slug}_turn"),
+                # Полезно для восстановления: какие игроки заблокированы этой ночью.
+                "blocked_tonight": [str(x) for x in rt.blocked_tonight],
             },
         )
 
-        # если действие уже сделано в БД — пропускаем ход (идемпотентность / resume mid-night)
         if turn_slug == "mafia":
             already_kill = await db.scalar(
                 select(NightAction.id).where(
@@ -376,11 +424,22 @@ async def execute_night_sequence(
             )
             if already_kill is not None:
                 return None
-            actors = [p for p in alive if role_slug(p) == "mafia"]
+            # Активные стрелки мафии: "обычная" мафия, не заблокированная любовницей.
+            actors = [
+                p for p in alive
+                if role_slug(p) == "mafia" and p.id not in rt.blocked_tonight
+            ]
+            # Доступные цели — живые не из мафии (мафия и дон — одна команда, не стреляем по своим).
+            def _is_non_mafia(pl: Player) -> bool:
+                if not pl.role_id:
+                    return True
+                r = role_by_id.get(pl.role_id)
+                return r is None or r.team != "mafia"
+
             available_targets = [
                 {"player_id": str(p.id), "name": p.name}
                 for p in alive
-                if role_slug(p) != "mafia"
+                if _is_non_mafia(p)
             ]
             if not actors:
                 return None
@@ -400,10 +459,30 @@ async def execute_night_sequence(
                     },
                 )
         else:
+            # Одиночные ходы: lover, don, sheriff, doctor, maniac.
             actors = [p for p in alive if role_slug(p) == turn_slug]
             if not actors:
                 return None
             actor = actors[0]
+
+            # Если актёр заблокирован любовницей — пропускаем ход (no-op).
+            if actor.id in rt.blocked_tonight:
+                await ws_manager.send_to_user(
+                    session.id,
+                    actor.user_id,
+                    {
+                        "type": "action_blocked",
+                        "payload": {
+                            "action_type": (
+                                (role_by_id.get(actor.role_id).abilities or {}).get("night_action")
+                                if actor.role_id else None
+                            ),
+                            "reason": "lover_block",
+                        },
+                    },
+                )
+                return None
+
             already = await db.scalar(
                 select(NightAction.id).where(
                     NightAction.phase_id == phase.id,
@@ -412,14 +491,52 @@ async def execute_night_sequence(
             )
             if already is not None:
                 return None
-            if turn_slug == "doctor":
-                available_targets = [{"player_id": str(p.id), "name": p.name} for p in alive]
-                action_type = "heal"
-            else:
+
+            if turn_slug == "lover":
+                action_type = "lover_visit"
+                # Нельзя посещать себя; нельзя повторять цель подряд.
                 available_targets = [
-                    {"player_id": str(p.id), "name": p.name} for p in alive if p.id != actor.id
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in alive
+                    if p.id != actor.id and p.id != rt.lover_last_target
                 ]
+            elif turn_slug == "don":
+                action_type = "don_check"
+
+                def _not_mafia_target(pl: Player) -> bool:
+                    if pl.id == actor.id:
+                        return False
+                    if not pl.role_id:
+                        return True
+                    r = role_by_id.get(pl.role_id)
+                    return r is None or r.team != "mafia"
+
+                # Дон не может проверять себя и мафию/дона.
+                available_targets = [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in alive
+                    if _not_mafia_target(p)
+                ]
+            elif turn_slug == "sheriff":
                 action_type = "check"
+                available_targets = [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in alive
+                    if p.id != actor.id
+                ]
+            elif turn_slug == "doctor":
+                action_type = "heal"
+                available_targets = [{"player_id": str(p.id), "name": p.name} for p in alive]
+            elif turn_slug == "maniac":
+                action_type = "maniac_kill"
+                available_targets = [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in alive
+                    if p.id != actor.id
+                ]
+            else:
+                return None
+
             await ws_manager.send_to_user(
                 session.id,
                 actor.user_id,
@@ -451,7 +568,7 @@ async def execute_night_sequence(
             return "paused"
         return None
 
-    order = ["mafia", "doctor", "sheriff"]
+    order = ["lover", "mafia", "don", "sheriff", "doctor", "maniac"]
     start_idx = 0
     first_seconds: int | None = None
     if resume_from:
@@ -493,44 +610,86 @@ def request_night_abort(session_id: uuid.UUID) -> None:
 
 
 async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) -> None:
-    # mafia kill
+    """Подсчёт жертв ночи.
+
+    Жертвы = (мафия_цель ∪ маньяк_цель) - доктор_цель.
+    Если мафия/маньяк были заблокированы любовницей — их действий в БД быть
+    не должно (роутер не принимает действия у заблокированных), но на всякий
+    случай перепроверяем флаг was_blocked.
+    """
+    rt = runtime_state.get(session.id)
+
     mafia_action = await db.scalar(
         select(NightAction).where(NightAction.phase_id == phase.id, NightAction.action_type == "kill")
+    )
+    maniac_action = await db.scalar(
+        select(NightAction).where(NightAction.phase_id == phase.id, NightAction.action_type == "maniac_kill")
     )
     doctor_action = await db.scalar(
         select(NightAction).where(NightAction.phase_id == phase.id, NightAction.action_type == "heal")
     )
-
-    died_player: Player | None = None
-    if mafia_action:
-        target = await db.get(Player, mafia_action.target_player_id)
-        if target and target.status == "alive":
-            if doctor_action and doctor_action.target_player_id == mafia_action.target_player_id:
-                mafia_action.was_blocked = True
-            else:
-                target.status = "dead"
-                died_player = target
-
-    payload = (
-        {"died": [{"player_id": str(died_player.id), "name": died_player.name}]} if died_player else {"died": None}
+    lover_action = await db.scalar(
+        select(NightAction).where(NightAction.phase_id == phase.id, NightAction.action_type == "lover_visit")
     )
+
+    # Соберём цели атак (учитываем только атаки от незаблокированных игроков).
+    attack_target_ids: set[uuid.UUID] = set()
+    if mafia_action and not mafia_action.was_blocked:
+        attack_target_ids.add(mafia_action.target_player_id)
+    if maniac_action and not maniac_action.was_blocked:
+        attack_target_ids.add(maniac_action.target_player_id)
+
+    healed_id: uuid.UUID | None = doctor_action.target_player_id if doctor_action else None
+
+    died_players: list[Player] = []
+    for tid in attack_target_ids:
+        if healed_id is not None and tid == healed_id:
+            # Помечаем все атаки на эту цель как заблокированные (доктором).
+            if mafia_action and mafia_action.target_player_id == tid:
+                mafia_action.was_blocked = True
+            if maniac_action and maniac_action.target_player_id == tid:
+                maniac_action.was_blocked = True
+            continue
+        target_player = await db.get(Player, tid)
+        if target_player and target_player.status == "alive":
+            target_player.status = "dead"
+            died_players.append(target_player)
+
+    # Обновим "последняя цель лавера" и "заблокированный на день игрок".
+    if lover_action:
+        rt.lover_last_target = lover_action.target_player_id
+        # Цель лавера не сможет голосовать утром. Если лавер выбрал цель, которая
+        # только что погибла, — всё равно сохраняем (мёртвый не голосует, но это безопасно).
+        rt.day_blocked_player = lover_action.target_player_id
+    else:
+        rt.day_blocked_player = None
+
+    died_payload = [
+        {"player_id": str(p.id), "name": p.name} for p in died_players
+    ]
+    payload = {"died": died_payload if died_payload else None}
     db.add(
         GameEvent(
             id=uuid.uuid4(),
             session_id=session.id,
             phase_id=phase.id,
             event_type="night_result",
-            payload=payload,
+            payload={
+                **payload,
+                # Для восстановления runtime_state после рестарта.
+                "lover_last_target": str(rt.lover_last_target) if rt.lover_last_target else None,
+                "day_blocked_player": str(rt.day_blocked_player) if rt.day_blocked_player else None,
+            },
         )
     )
-    if died_player:
+    for dp in died_players:
         db.add(
             GameEvent(
                 id=uuid.uuid4(),
                 session_id=session.id,
                 phase_id=phase.id,
                 event_type="player_eliminated",
-                payload={"player_id": str(died_player.id), "name": died_player.name, "cause": "night"},
+                payload={"player_id": str(dp.id), "name": dp.name, "cause": "night"},
             )
         )
     await db.commit()
@@ -539,12 +698,12 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
         session.id,
         {"type": "night_result", "payload": {**payload, "announcement": _announcement("night_result")}},
     )
-    if died_player:
+    for dp in died_players:
         await ws_manager.send_to_session(
             session.id,
             {
                 "type": "player_eliminated",
-                "payload": {"player_id": str(died_player.id), "name": died_player.name, "cause": "night"},
+                "payload": {"player_id": str(dp.id), "name": dp.name, "cause": "night"},
             },
         )
 

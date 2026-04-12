@@ -1,37 +1,53 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
-import { startVoting } from '../../mocks/mockGameEngine';
 import './DayDiscussionScreen.scss';
+
+/**
+ * Compute remaining seconds from phase.timer_seconds + phase.timer_started_at.
+ * If the server already kicked off the timer a while ago, align the UI
+ * countdown instead of starting fresh.
+ */
+function computeRemainingSeconds(
+  timerSeconds: number | null | undefined,
+  timerStartedAt: string | null | undefined,
+  fallback: number,
+): number {
+  if (!timerSeconds) return fallback;
+  if (!timerStartedAt) return timerSeconds;
+  const startedMs = Date.parse(timerStartedAt);
+  if (Number.isNaN(startedMs)) return timerSeconds;
+  const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+  return Math.max(0, timerSeconds - elapsed);
+}
 
 export default function DayDiscussionScreen() {
   const players = useGameStore((s) => s.players);
   const nightResultDied = useGameStore((s) => s.nightResultDied);
   const dayBlockedPlayer = useGameStore((s) => s.dayBlockedPlayer);
-  const discussionTimer = useSessionStore((s) => s.settings.discussion_timer_seconds);
   const myStatus = useGameStore((s) => s.myStatus);
+  const phase = useGameStore((s) => s.phase);
+  const discussionTimer = useSessionStore((s) => s.settings.discussion_timer_seconds);
 
   const [timeLeft, setTimeLeft] = useState(discussionTimer);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    setTimeLeft(discussionTimer);
-  }, [discussionTimer]);
+    const remaining = computeRemainingSeconds(
+      phase?.timer_seconds,
+      phase?.timer_started_at,
+      discussionTimer,
+    );
+    setTimeLeft(remaining);
+  }, [phase?.id, phase?.timer_seconds, phase?.timer_started_at, discussionTimer]);
 
   useEffect(() => {
     if (timeLeft <= 0) {
       if (intervalRef.current) clearInterval(intervalRef.current);
-      startVoting();
       return;
     }
     intervalRef.current = setInterval(() => {
-      setTimeLeft((t) => {
-        if (t <= 1) {
-          startVoting();
-          return 0;
-        }
-        return t - 1;
-      });
+      setTimeLeft((t) => (t <= 1 ? 0 : t - 1));
     }, 1000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [timeLeft]);
@@ -114,12 +130,6 @@ export default function DayDiscussionScreen() {
           Вы наблюдаете за игрой
         </div>
       )}
-
-      <div className="day-discussion__footer">
-        <button className="day-discussion__vote-btn" onClick={() => startVoting()}>
-          Перейти к голосованию
-        </button>
-      </div>
     </div>
   );
 }

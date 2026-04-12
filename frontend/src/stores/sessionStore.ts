@@ -1,7 +1,12 @@
 import { create } from 'zustand';
-import { Session, SessionSettings, LobbyPlayer, Role, RoleConfig } from '../types/game';
-import { mockSession, mockLobbyPlayers, mockDefaultSettings } from '../mocks/sessionMocks';
-import { mockRoles } from '../mocks/gameMocks';
+import { Session, SessionSettings, LobbyPlayer, RoleConfig } from '../types/game';
+import type {
+  CreateSessionRequest,
+  PlayerInList,
+  UpdateSettingsRequest,
+} from '../types/api';
+import { sessionApi } from '../api/sessionApi';
+import { useAuthStore } from './authStore';
 
 export const MAX_PLAYERS = 12;
 export const MIN_PLAYERS = 5;
@@ -14,140 +19,188 @@ export function getCiviliansCount(playerCount: number, rc: RoleConfig): number {
   return Math.max(0, playerCount - getSpecialRolesCount(rc));
 }
 
+const DEFAULT_SETTINGS: SessionSettings = {
+  role_reveal_timer_seconds: 15,
+  discussion_timer_seconds: 120,
+  voting_timer_seconds: 60,
+  night_action_timer_seconds: 30,
+  role_config: {
+    mafia: 1,
+    don: 0,
+    sheriff: 1,
+    doctor: 1,
+    lover: 0,
+    maniac: 0,
+  },
+};
+
 interface SessionState {
   session: Session | null;
   players: LobbyPlayer[];
   settings: SessionSettings;
   isHost: boolean;
   myPlayerId: string | null;
-  myRole: Role | null;
-  acknowledged: boolean;
-  acknowledgedCount: number;
-  totalPlayers: number;
+
+  // Client-only fields for story voting (not persisted to backend)
   withStory: boolean;
   selectedStoryId: string | null;
   timerPaused: boolean;
 
-  createSession: () => void;
-  joinSession: (code: string, name: string) => boolean;
-  setSettings: (settings: Partial<SessionSettings>) => void;
-  addPlayer: (player: LobbyPlayer) => void;
+  // API-backed actions
+  createSession: (data: CreateSessionRequest) => Promise<string>;
+  joinSession: (code: string, name: string) => Promise<void>;
+  loadByCode: (code: string) => Promise<void>;
+  setSettings: (settings: UpdateSettingsRequest) => Promise<void>;
+
+  // WebSocket hooks
+  upsertPlayer: (player: PlayerInList) => void;
   removePlayer: (playerId: string) => void;
+  setPlayers: (list: PlayerInList[]) => void;
+  applySessionSettings: (settings: SessionSettings) => void;
+
+  // Local-only actions
   setWithStory: (value: boolean) => void;
   setSelectedStory: (storyId: string) => void;
-  startGame: () => void;
-  assignRole: (role: Role) => void;
-  acknowledgeRole: () => void;
-  addAcknowledgment: () => void;
   setTimerPaused: (paused: boolean) => void;
   reset: () => void;
 }
 
-function generateCode(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let code = '';
-  for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
-}
-
-function generateUUID(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
-
-function buildRoleList(rc: RoleConfig): string[] {
-  const list: string[] = [];
-  for (let i = 0; i < rc.mafia; i++) list.push('mafia');
-  for (let i = 0; i < rc.don; i++) list.push('don');
-  for (let i = 0; i < rc.sheriff; i++) list.push('sheriff');
-  for (let i = 0; i < rc.doctor; i++) list.push('doctor');
-  for (let i = 0; i < rc.lover; i++) list.push('lover');
-  for (let i = 0; i < rc.maniac; i++) list.push('maniac');
-  return list;
+function playersFromList(list: PlayerInList[]): LobbyPlayer[] {
+  return list.map((p) => ({
+    id: p.id,
+    name: p.name,
+    join_order: p.join_order,
+    is_host: p.is_host,
+  }));
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
   session: null,
   players: [],
-  settings: mockDefaultSettings,
+  settings: DEFAULT_SETTINGS,
   isHost: false,
   myPlayerId: null,
-  myRole: null,
-  acknowledged: false,
-  acknowledgedCount: 0,
-  totalPlayers: 0,
+
   withStory: false,
   selectedStoryId: null,
   timerPaused: false,
 
-  createSession: () => {
-    const code = generateCode();
-    const sessionId = generateUUID();
-    const playerId = generateUUID();
-    const session: Session = {
-      ...mockSession,
-      id: sessionId,
-      code,
-      status: 'waiting',
-      player_count: MAX_PLAYERS,
-    };
-    const hostPlayer: LobbyPlayer = {
-      id: playerId,
-      name: 'Вы (Организатор)',
-      join_order: 1,
-      is_host: true,
-    };
+  createSession: async (data) => {
+    const response = await sessionApi.create(data);
+    const session = response.data;
+    // Hydrate full detail + players via getByCode (players содержат is_me для определения своего слота).
+    const detail = await sessionApi.getByCode(session.code);
+    const detailData = detail.data;
+    const currentUser = useAuthStore.getState().user;
+    const players = playersFromList(detailData.players);
+    const myPlayer = detailData.players.find((p) => p.is_me);
     set({
-      session,
-      players: [hostPlayer],
-      isHost: true,
-      myPlayerId: playerId,
-      settings: { ...mockDefaultSettings },
+      session: detailData,
+      players,
+      settings: detailData.settings,
+      isHost: currentUser ? detailData.host_user_id === currentUser.user_id : true,
+      myPlayerId: myPlayer?.id ?? null,
+    });
+    return session.code;
+  },
+
+  joinSession: async (code, name) => {
+    const joinResponse = await sessionApi.join(code, { name });
+    const joinData = joinResponse.data;
+    const detail = await sessionApi.getByCode(code);
+    const detailData = detail.data;
+    const currentUser = useAuthStore.getState().user;
+    const players = playersFromList(detailData.players);
+    // myPlayerId: сначала пробуем is_me из detailData, потом fallback на player_id из POST /join.
+    const myPlayer = detailData.players.find((p) => p.is_me);
+    set({
+      session: detailData,
+      players,
+      settings: detailData.settings,
+      isHost: currentUser ? detailData.host_user_id === currentUser.user_id : false,
+      myPlayerId: myPlayer?.id ?? joinData.player_id,
     });
   },
 
-  joinSession: (code: string, name: string) => {
+  loadByCode: async (code) => {
+    const detail = await sessionApi.getByCode(code);
+    const detailData = detail.data;
+    const currentUser = useAuthStore.getState().user;
+    const players = playersFromList(detailData.players);
+    // После F5: находим себя через is_me (работает и для хоста, и для обычного игрока).
+    const myPlayer = detailData.players.find((p) => p.is_me);
+    set({
+      session: detailData,
+      players,
+      settings: detailData.settings,
+      isHost: currentUser ? detailData.host_user_id === currentUser.user_id : false,
+      myPlayerId: myPlayer?.id ?? null,
+    });
+  },
+
+  setSettings: async (newSettings) => {
     const state = get();
-    if (!state.session || state.session.code !== code) {
-      const playerId = generateUUID();
-      const session: Session = {
-        ...mockSession,
-        code,
-        status: 'waiting',
-        player_count: MAX_PLAYERS,
-      };
-      const player: LobbyPlayer = {
-        id: playerId,
-        name,
-        join_order: state.players.length + 1,
-        is_host: false,
-      };
-      set({
-        session,
-        players: [...mockLobbyPlayers, player],
-        isHost: false,
-        myPlayerId: playerId,
-      });
-      return true;
+    if (!state.session) return;
+    // Sanitize: only forward fields supported by backend.
+    const payload: UpdateSettingsRequest = {};
+    if (newSettings.role_reveal_timer_seconds !== undefined) {
+      payload.role_reveal_timer_seconds = newSettings.role_reveal_timer_seconds;
     }
-    return false;
+    if (newSettings.discussion_timer_seconds !== undefined) {
+      payload.discussion_timer_seconds = newSettings.discussion_timer_seconds;
+    }
+    if (newSettings.voting_timer_seconds !== undefined) {
+      payload.voting_timer_seconds = newSettings.voting_timer_seconds;
+    }
+    if (newSettings.night_action_timer_seconds !== undefined) {
+      payload.night_action_timer_seconds = newSettings.night_action_timer_seconds;
+    }
+    if (newSettings.role_config) {
+      const rc = newSettings.role_config;
+      const filtered: Partial<RoleConfig> = {};
+      if (rc.mafia !== undefined) filtered.mafia = rc.mafia;
+      if (rc.don !== undefined) filtered.don = rc.don;
+      if (rc.sheriff !== undefined) filtered.sheriff = rc.sheriff;
+      if (rc.doctor !== undefined) filtered.doctor = rc.doctor;
+      if (rc.lover !== undefined) filtered.lover = rc.lover;
+      if (rc.maniac !== undefined) filtered.maniac = rc.maniac;
+      payload.role_config = filtered;
+    }
+    const response = await sessionApi.updateSettings(state.session.id, payload);
+    const updated = response.data?.settings as SessionSettings | undefined;
+    if (updated) {
+      set({ settings: updated });
+    } else {
+      // Optimistic fallback: merge locally.
+      set((s) => ({
+        settings: {
+          ...s.settings,
+          ...newSettings,
+          role_config: {
+            ...s.settings.role_config,
+            ...(newSettings.role_config || {}),
+          },
+        },
+      }));
+    }
   },
 
-  setSettings: (newSettings) => {
-    set((state) => ({
-      settings: { ...state.settings, ...newSettings },
-    }));
-  },
-
-  addPlayer: (player) => {
+  upsertPlayer: (player) => {
     set((state) => {
+      const idx = state.players.findIndex((p) => p.id === player.id);
+      const mapped: LobbyPlayer = {
+        id: player.id,
+        name: player.name,
+        join_order: player.join_order,
+        is_host: player.is_host,
+      };
+      if (idx >= 0) {
+        const next = [...state.players];
+        next[idx] = mapped;
+        return { players: next };
+      }
       if (state.players.length >= MAX_PLAYERS) return state;
-      return { players: [...state.players, player] };
+      return { players: [...state.players, mapped] };
     });
   },
 
@@ -155,6 +208,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((state) => ({
       players: state.players.filter((p) => p.id !== playerId),
     }));
+  },
+
+  setPlayers: (list) => {
+    set({ players: playersFromList(list) });
+  },
+
+  applySessionSettings: (settings) => {
+    set({ settings });
   },
 
   setWithStory: (value) => {
@@ -165,44 +226,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ selectedStoryId: storyId });
   },
 
-  startGame: () => {
-    const state = get();
-    const playerCount = state.players.length;
-    const specialRoles = buildRoleList(state.settings.role_config);
-    const civCount = getCiviliansCount(playerCount, state.settings.role_config);
-    const allRoles = [...specialRoles];
-    for (let i = 0; i < civCount; i++) allRoles.push('civilian');
-    const shuffled = allRoles.sort(() => Math.random() - 0.5);
-    const myIndex = state.players.findIndex((p) => p.id === state.myPlayerId);
-    const myRoleKey = shuffled[myIndex] || 'civilian';
-    const myRole = mockRoles[myRoleKey] || mockRoles.civilian;
-
-    set({
-      session: state.session ? { ...state.session, status: 'active' } : null,
-      myRole: myRole,
-      acknowledged: false,
-      acknowledgedCount: 0,
-      totalPlayers: playerCount,
-    });
-  },
-
-  assignRole: (role) => {
-    set({ myRole: role });
-  },
-
-  acknowledgeRole: () => {
-    set((state) => ({
-      acknowledged: true,
-      acknowledgedCount: state.acknowledgedCount + 1,
-    }));
-  },
-
-  addAcknowledgment: () => {
-    set((state) => ({
-      acknowledgedCount: state.acknowledgedCount + 1,
-    }));
-  },
-
   setTimerPaused: (paused) => {
     set({ timerPaused: paused });
   },
@@ -211,13 +234,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({
       session: null,
       players: [],
-      settings: mockDefaultSettings,
+      settings: DEFAULT_SETTINGS,
       isHost: false,
       myPlayerId: null,
-      myRole: null,
-      acknowledged: false,
-      acknowledgedCount: 0,
-      totalPlayers: 0,
       withStory: false,
       selectedStoryId: null,
       timerPaused: false,

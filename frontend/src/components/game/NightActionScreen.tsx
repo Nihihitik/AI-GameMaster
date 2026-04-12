@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useGameStore, CheckResultEntry } from '../../stores/gameStore';
-import { submitNightAction, skipMafiaKill, advanceNightAction } from '../../mocks/mockGameEngine';
 import { useSessionStore } from '../../stores/sessionStore';
 import './NightActionScreen.scss';
 
@@ -11,14 +10,16 @@ export default function NightActionScreen() {
   const selectedTarget = useGameStore((s) => s.selectedTarget);
   const actionSubmitted = useGameStore((s) => s.actionSubmitted);
   const checkResults = useGameStore((s) => s.checkResults);
-  const mafiaCanSkip = useGameStore((s) => s.mafiaCanSkip);
   const setSelectedTarget = useGameStore((s) => s.setSelectedTarget);
+  const submitNightAction = useGameStore((s) => s.submitNightAction);
   const nightActionTimer = useSessionStore((s) => s.settings.night_action_timer_seconds);
 
   const [timeLeft, setTimeLeft] = useState(nightActionTimer);
   const [showCheckResult, setShowCheckResult] = useState<CheckResultEntry | null>(null);
   const [hiddenResults, setHiddenResults] = useState<Set<string>>(new Set());
+  const [submitting, setSubmitting] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastCheckCountRef = useRef(checkResults.length);
 
   useEffect(() => {
     setTimeLeft(nightActionTimer);
@@ -30,42 +31,31 @@ export default function NightActionScreen() {
       return;
     }
     intervalRef.current = setInterval(() => {
-      setTimeLeft((t) => {
-        if (t <= 1) {
-          handleTimeOut();
-          return 0;
-        }
-        return t - 1;
-      });
+      setTimeLeft((t) => (t <= 1 ? 0 : t - 1));
     }, 1000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actionSubmitted, timeLeft]);
 
-  const handleTimeOut = () => {
-    if (!actionSubmitted) {
-      advanceNightAction();
+  // Surface a newly arrived check result (from WS or inline response).
+  useEffect(() => {
+    if (checkResults.length > lastCheckCountRef.current) {
+      const latest = checkResults[checkResults.length - 1];
+      if (latest && (latest.actionType === 'check' || latest.actionType === 'don_check')) {
+        setShowCheckResult(latest);
+      }
     }
-  };
+    lastCheckCountRef.current = checkResults.length;
+  }, [checkResults]);
 
-  const handleConfirm = () => {
-    if (!selectedTarget || actionSubmitted) return;
-    submitNightAction(selectedTarget);
-
-    if (actionType === 'check' || actionType === 'don_check') {
-      setTimeout(() => {
-        const results = useGameStore.getState().checkResults;
-        const latest = results[results.length - 1];
-        if (latest) {
-          setShowCheckResult(latest);
-        }
-      }, 500);
-    }
-  };
-
-  const handleSkip = () => {
-    if (actionType === 'kill' && mafiaCanSkip) {
-      skipMafiaKill();
+  const handleConfirm = async () => {
+    if (!selectedTarget || actionSubmitted || submitting) return;
+    setSubmitting(true);
+    try {
+      await submitNightAction(selectedTarget);
+    } catch (err) {
+      // Error path — reset submitting state so the user can retry.
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -81,7 +71,11 @@ export default function NightActionScreen() {
   const getTargetState = (targetId: string): 'default' | 'selected' | 'checked-mafia' | 'checked-city' | 'blocked' => {
     const result = checkResults.find((r) => r.targetId === targetId);
     if (result) {
-      return result.team === 'mafia' ? 'checked-mafia' : 'checked-city';
+      if (result.actionType === 'don_check') {
+        return result.isSheriff ? 'checked-mafia' : 'checked-city';
+      }
+      if (result.team === 'mafia') return 'checked-mafia';
+      if (result.team === 'city' || result.team === 'maniac') return 'checked-city';
     }
     if (selectedTarget === targetId) return 'selected';
     return 'default';
@@ -89,7 +83,10 @@ export default function NightActionScreen() {
 
   const isTargetDisabled = (targetId: string): boolean => {
     const result = checkResults.find((r) => r.targetId === targetId);
-    if (result && result.team === 'city') return true;
+    if (result) {
+      if (result.actionType === 'don_check' && !result.isSheriff) return true;
+      if (result.team === 'city') return true;
+    }
     return false;
   };
 
@@ -129,15 +126,30 @@ export default function NightActionScreen() {
   }
 
   if (showCheckResult) {
-    const isFound = showCheckResult.team === 'mafia';
+    const isCheck = showCheckResult.actionType === 'check';
+    const isDonCheck = showCheckResult.actionType === 'don_check';
+    const isMafia = isCheck
+      ? showCheckResult.team === 'mafia'
+      : isDonCheck
+        ? !!showCheckResult.isSheriff // for don: "match" — we show similar alerting
+        : false;
     const targetName = availableTargets.find((t) => t.player_id === showCheckResult.targetId)?.name || '???';
 
+    let title = isMafia ? 'Мафия обнаружена!' : 'Чист';
+    let teamText = isMafia ? 'Этот игрок — представитель мафии' : 'Этот игрок — мирный';
+    if (isDonCheck) {
+      title = showCheckResult.isSheriff ? 'Найден Шериф!' : 'Не Шериф';
+      teamText = showCheckResult.isSheriff
+        ? 'Этот игрок — шериф'
+        : 'Этот игрок не является шерифом';
+    }
+
     return (
-      <div className={`night-action night-action--check-result ${isFound ? 'night-action--found' : 'night-action--clean'}`}>
+      <div className={`night-action night-action--check-result ${isMafia ? 'night-action--found' : 'night-action--clean'}`}>
         <div className="night-action__ambient" />
         <div className="night-action__check-result-content">
-          <div className={`night-action__result-badge ${isFound ? 'night-action__result-badge--mafia' : 'night-action__result-badge--city'}`}>
-            {isFound ? (
+          <div className={`night-action__result-badge ${isMafia ? 'night-action__result-badge--mafia' : 'night-action__result-badge--city'}`}>
+            {isMafia ? (
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M12 9v2m0 4h.01" />
                 <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
@@ -148,19 +160,12 @@ export default function NightActionScreen() {
               </svg>
             )}
           </div>
-          <h2 className="night-action__result-title">
-            {isFound ? 'Мафия обнаружена!' : 'Чист'}
-          </h2>
+          <h2 className="night-action__result-title">{title}</h2>
           <p className="night-action__result-name">{targetName}</p>
-          <p className="night-action__result-team">
-            {isFound ? 'Этот игрок — представитель мафии' : 'Этот игрок — мирный'}
-          </p>
+          <p className="night-action__result-team">{teamText}</p>
           <button
             className="night-action__result-continue"
-            onClick={() => {
-              setShowCheckResult(null);
-              advanceNightAction();
-            }}
+            onClick={() => setShowCheckResult(null)}
           >
             Продолжить
           </button>
@@ -220,19 +225,16 @@ export default function NightActionScreen() {
       <div className="night-action__actions">
         <button
           className="night-action__confirm"
-          disabled={!selectedTarget}
+          disabled={!selectedTarget || submitting}
           onClick={handleConfirm}
         >
           <span className="night-action__confirm-glow" />
           <span className="night-action__confirm-content">
-            <span className="night-action__confirm-text">Подтвердить</span>
+            <span className="night-action__confirm-text">
+              {submitting ? 'Отправка...' : 'Подтвердить'}
+            </span>
           </span>
         </button>
-        {actionType === 'kill' && mafiaCanSkip && (
-          <button className="night-action__skip" onClick={handleSkip}>
-            Пропустить ход
-          </button>
-        )}
       </div>
     </div>
   );

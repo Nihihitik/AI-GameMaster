@@ -1,8 +1,9 @@
 export interface Role {
-  name: string;          // "Мафия", "Шериф", "Доктор", "Мирный"
-  team: 'mafia' | 'city';
+  slug?: string;         // backend stable identifier: "mafia", "don", "sheriff", ...
+  name: string;          // "Мафия", "Шериф", "Доктор", "Мирный", "Дон"
+  team: 'mafia' | 'city' | 'maniac';
   abilities?: {
-    night_action: 'kill' | 'check' | 'heal' | null;
+    night_action: 'kill' | 'check' | 'heal' | 'don_check' | 'lover_visit' | 'maniac_kill' | null;
   };
 }
 
@@ -14,7 +15,7 @@ export interface Player {
 }
 
 export interface PlayerWithRole extends Player {
-  role: { name: string; team: 'mafia' | 'city' };
+  role: { slug?: string; name: string; team: 'mafia' | 'city' | 'maniac' };
 }
 
 export interface Phase {
@@ -57,7 +58,7 @@ export interface VoteInfo {
 }
 
 export interface GameResult {
-  winner: 'mafia' | 'city' | null;
+  winner: 'mafia' | 'city' | 'maniac' | null;
   announcement: Announcement;
   players: PlayerWithRole[];
 }

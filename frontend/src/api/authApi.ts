@@ -1,5 +1,15 @@
 import httpClient from './httpClient';
-import { RegisterRequest, LoginRequest, AuthResponse, RefreshRequest, RefreshResponse, UserProfile, LogoutRequest } from '../types/api';
+import {
+  RegisterRequest,
+  LoginRequest,
+  AuthResponse,
+  RefreshRequest,
+  RefreshResponse,
+  UserProfile,
+  LogoutRequest,
+  UpdateNicknameRequest,
+  DeleteAccountRequest,
+} from '../types/api';
 
 export const authApi = {
   register: (data: RegisterRequest) =>
@@ -16,4 +26,10 @@ export const authApi = {
 
   logout: (data: LogoutRequest) =>
     httpClient.post('/auth/logout', data),
+
+  updateNickname: (data: UpdateNicknameRequest) =>
+    httpClient.patch<UserProfile>('/auth/me', data),
+
+  deleteAccount: (data: DeleteAccountRequest) =>
+    httpClient.delete('/auth/me', { data }),
 };

@@ -1,51 +1,16 @@
-import { Session, SessionSettings, LobbyPlayer } from '../types/game';
-import { CreateSessionResponse, GetSessionResponse, JoinSessionResponse } from '../types/api';
+// Only story entries are kept here; everything else used to be mock-based
+// has been removed in favor of real API integration.
+// `mockStories` powers the client-side story voting screen (cosmetic only,
+// never sent to the backend).
 
-export const mockDefaultSettings: SessionSettings = {
-  role_reveal_timer_seconds: 15,
-  discussion_timer_seconds: 120,
-  voting_timer_seconds: 60,
-  night_action_timer_seconds: 30,
-  role_config: {
-    mafia: 1,
-    don: 1,
-    sheriff: 1,
-    doctor: 1,
-    lover: 1,
-    maniac: 1,
-  },
-};
+export interface Story {
+  id: string;
+  title: string;
+  description: string;
+  image: string;
+}
 
-export const mockSession: Session = {
-  id: '550e8400-e29b-41d4-a716-446655440000',
-  code: 'AX7K2M',
-  host_user_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-  player_count: 8,
-  status: 'waiting',
-  settings: mockDefaultSettings,
-  created_at: '2026-04-08T12:00:00Z',
-};
-
-export const mockCreateSessionResponse: CreateSessionResponse = {
-  ...mockSession,
-};
-
-export const mockLobbyPlayers: LobbyPlayer[] = [
-  { id: 'player-uuid-001', name: 'Вы (Организатор)', join_order: 1, is_host: true },
-];
-
-export const mockGetSessionResponse: GetSessionResponse = {
-  ...mockSession,
-  players: mockLobbyPlayers,
-};
-
-export const mockJoinSessionResponse: JoinSessionResponse = {
-  player_id: 'player-uuid-009',
-  session_id: '550e8400-e29b-41d4-a716-446655440000',
-  join_order: 2,
-};
-
-export const mockStories = [
+export const mockStories: Story[] = [
   {
     id: 'no-story',
     title: 'Без сюжета',

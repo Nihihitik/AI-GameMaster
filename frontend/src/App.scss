@@ -1,1 +1,12 @@
-/* Empty — global app styles are in index.scss */
+/* Splash-экран, который показывается пока идёт автологин по refresh-токену (authStore.initialize). */
+.app-bootstrap {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  color: #fff;
+  z-index: 9999;
+}
+

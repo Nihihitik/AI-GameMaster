@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useGameStore } from '../stores/gameStore';
 import { useSessionStore } from '../stores/sessionStore';
-import { startGameCycle, beginNightSequence, cleanupEngine } from '../mocks/mockGameEngine';
-import { roleImages, roleDescriptions, cardBackImage, mockRoles } from '../mocks/gameMocks';
+import { wsClient } from '../api/wsClient';
+import { getRoleInfo, CARD_BACK_IMAGE } from '../utils/roles';
 import NarratorScreen from '../components/game/NarratorScreen';
 import NightActionScreen from '../components/game/NightActionScreen';
 import NightWaitingScreen from '../components/game/NightWaitingScreen';
@@ -13,31 +13,17 @@ import FinaleScreen from '../components/game/FinaleScreen';
 import RulesModal, { RulesButton } from '../components/game/RulesModal';
 import Button from '../components/ui/Button';
 import Loader from '../components/ui/Loader';
-import { Player, Role } from '../types/game';
 import './GamePage.scss';
 
-function getRoleSlug(role: Role): string {
-  const map: Record<string, string> = {
-    'Мафия': 'mafia',
-    'Дон Мафии': 'don',
-    'Шериф': 'sheriff',
-    'Доктор': 'doctor',
-    'Мирный житель': 'civilian',
-    'Любовница': 'lover',
-    'Маньяк': 'maniac',
-  };
-  return map[role.name] || 'civilian';
-}
-
 function NightActionIcon({ action }: { action: string }) {
-  if (action === 'kill') {
+  if (action === 'kill' || action === 'maniac_kill') {
     return (
       <svg className="role-abilities__action-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <path d="M14.5 2l-5 5-2-2L2 10.5 13.5 22 19 16.5l-2-2 5-5z" />
       </svg>
     );
   }
-  if (action === 'check') {
+  if (action === 'check' || action === 'don_check') {
     return (
       <svg className="role-abilities__action-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="11" cy="11" r="8" />
@@ -52,7 +38,24 @@ function NightActionIcon({ action }: { action: string }) {
       </svg>
     );
   }
+  if (action === 'lover_visit') {
+    return (
+      <svg className="role-abilities__action-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+      </svg>
+    );
+  }
   return null;
+}
+
+function actionLabel(action: string): string {
+  if (action === 'kill') return 'Убийство';
+  if (action === 'maniac_kill') return 'Убийство (маньяк)';
+  if (action === 'check') return 'Проверка';
+  if (action === 'don_check') return 'Проверка шерифа';
+  if (action === 'heal') return 'Лечение';
+  if (action === 'lover_visit') return 'Посещение';
+  return '';
 }
 
 export default function GamePage() {
@@ -60,95 +63,73 @@ export default function GamePage() {
   const navigate = useNavigate();
 
   const screen = useGameStore((s) => s.screen);
+  const myRole = useGameStore((s) => s.myRole);
+  const acknowledged = useGameStore((s) => s.acknowledged);
+  const acknowledgedCount = useGameStore((s) => s.acknowledgedCount);
+  const totalPlayers = useGameStore((s) => s.totalPlayers);
+  const phase = useGameStore((s) => s.phase);
+  const acknowledgeRoleAsync = useGameStore((s) => s.acknowledgeRole);
 
-  const sessionMyRole = useSessionStore((s) => s.myRole);
-  const sessionPlayers = useSessionStore((s) => s.players);
-  const sessionSettings = useSessionStore((s) => s.settings);
-  const sessionAcknowledged = useSessionStore((s) => s.acknowledged);
-  const sessionAcknowledgedCount = useSessionStore((s) => s.acknowledgedCount);
-  const sessionTotalPlayers = useSessionStore((s) => s.totalPlayers);
-  const sessionMyPlayerId = useSessionStore((s) => s.myPlayerId);
   const timerPaused = useSessionStore((s) => s.timerPaused);
   const setTimerPaused = useSessionStore((s) => s.setTimerPaused);
-  const acknowledgeRole = useSessionStore((s) => s.acknowledgeRole);
-  const addAcknowledgment = useSessionStore((s) => s.addAcknowledgment);
 
   const [showRules, setShowRules] = useState(false);
   const [flipped, setFlipped] = useState(false);
   const [showAbilities, setShowAbilities] = useState(false);
-  const [allReady, setAllReady] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
-  const [gameInitialized, setGameInitialized] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Initialize game store from session store
+  // Load game state + open WebSocket on mount.
   useEffect(() => {
-    if (!sessionMyRole || !sessionPlayers.length || gameInitialized) return;
+    if (!sessionId) {
+      navigate('/', { replace: true });
+      return;
+    }
 
-    const gameStore = useGameStore.getState();
-    gameStore.setSessionId(sessionId || '');
-    gameStore.setMyPlayerId(sessionMyPlayerId || '');
-    gameStore.setMyRole(sessionMyRole);
-    gameStore.setTotalPlayers(sessionPlayers.length);
+    let cancelled = false;
 
-    // Build players for game
-    const gamePlayers: Player[] = sessionPlayers.map((p) => ({
-      id: p.id,
-      name: p.name,
-      status: 'alive' as const,
-      join_order: p.join_order,
-    }));
-    gameStore.setPlayers(gamePlayers);
-
-    // Assign roles to all players (mock)
-    const roleConfig = sessionSettings.role_config;
-    const roleList: string[] = [];
-    for (let i = 0; i < roleConfig.mafia; i++) roleList.push('mafia');
-    for (let i = 0; i < roleConfig.don; i++) roleList.push('don');
-    for (let i = 0; i < roleConfig.sheriff; i++) roleList.push('sheriff');
-    for (let i = 0; i < roleConfig.doctor; i++) roleList.push('doctor');
-    for (let i = 0; i < roleConfig.lover; i++) roleList.push('lover');
-    for (let i = 0; i < roleConfig.maniac; i++) roleList.push('maniac');
-    while (roleList.length < sessionPlayers.length) roleList.push('civilian');
-    const shuffled = roleList.sort(() => Math.random() - 0.5);
-
-    const assignment: Record<string, Role> = {};
-    const activeRolesSet = new Set<string>();
-    sessionPlayers.forEach((p, i) => {
-      const slug = shuffled[i];
-      const role = mockRoles[slug] || mockRoles.civilian;
-      if (p.id === sessionMyPlayerId) {
-        assignment[p.id] = sessionMyRole;
-        activeRolesSet.add(getRoleSlug(sessionMyRole));
-      } else {
-        assignment[p.id] = role;
-        activeRolesSet.add(slug);
+    (async () => {
+      try {
+        await useGameStore.getState().loadState(sessionId);
+        if (cancelled) return;
+        wsClient.connect(sessionId);
+      } catch (err: any) {
+        if (!cancelled) {
+          setLoadError(err?.message || 'Не удалось загрузить состояние игры');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    });
-
-    gameStore.setAllRolesAssignment(assignment);
-    gameStore.setActiveRoles(Array.from(activeRolesSet));
-    gameStore.setScreen('role_reveal');
-
-    setTimeLeft(sessionSettings.role_reveal_timer_seconds);
-    setGameInitialized(true);
+    })();
 
     return () => {
-      cleanupEngine();
+      cancelled = true;
+      wsClient.disconnect();
     };
-  }, [sessionMyRole, sessionPlayers, sessionSettings, sessionMyPlayerId, sessionId, gameInitialized]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
-  // Role reveal timer
+  // Role reveal timer — uses the current phase timer.
   useEffect(() => {
     if (screen !== 'role_reveal') return;
-    if (timeLeft <= 0 || timerPaused || sessionAcknowledged) {
+    const seconds = phase?.timer_seconds ?? 15;
+    setTimeLeft(seconds);
+  }, [screen, phase?.id, phase?.timer_seconds]);
+
+  useEffect(() => {
+    if (screen !== 'role_reveal') return;
+    if (timeLeft <= 0 || timerPaused || acknowledged) {
       if (intervalRef.current) clearInterval(intervalRef.current);
       return;
     }
     intervalRef.current = setInterval(() => {
       setTimeLeft((t) => {
         if (t <= 1) {
-          if (!sessionAcknowledged) acknowledgeRole();
+          if (!acknowledged) {
+            acknowledgeRoleAsync().catch(() => {});
+          }
           return 0;
         }
         return t - 1;
@@ -156,54 +137,7 @@ export default function GamePage() {
     }, 1000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen, timeLeft, timerPaused, sessionAcknowledged]);
-
-  // Simulate other acknowledgments
-  useEffect(() => {
-    if (screen !== 'role_reveal') return;
-    if (sessionAcknowledged && sessionTotalPlayers > 0) {
-      const remaining = sessionTotalPlayers - sessionAcknowledgedCount;
-      if (remaining > 0) {
-        const timers: ReturnType<typeof setTimeout>[] = [];
-        for (let i = 0; i < remaining; i++) {
-          timers.push(setTimeout(() => addAcknowledgment(), (i + 1) * 1200));
-        }
-        return () => timers.forEach(clearTimeout);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionAcknowledged, screen]);
-
-  // All acknowledged → transition to game
-  useEffect(() => {
-    if (screen !== 'role_reveal') return;
-    if (sessionAcknowledgedCount >= sessionTotalPlayers && sessionTotalPlayers > 0 && sessionAcknowledged) {
-      const timer = setTimeout(() => setAllReady(true), 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [sessionAcknowledgedCount, sessionTotalPlayers, sessionAcknowledged, screen]);
-
-  // After allReady, start game cycle
-  useEffect(() => {
-    if (!allReady) return;
-    const timer = setTimeout(() => {
-      startGameCycle();
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, [allReady]);
-
-  // When narrator finishes and pendingScreen is night_waiting, start night sequence
-  useEffect(() => {
-    if (screen === 'night_waiting') {
-      const timer = setTimeout(() => {
-        beginNightSequence();
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [screen]);
-
-  // When narrator finishes and goes to night_action, nothing to do (user sees action screen)
-  // When narrator finishes and goes to day_discussion, the discussion screen handles itself
+  }, [screen, timeLeft, timerPaused, acknowledged]);
 
   const handleFlip = () => {
     if (!flipped) {
@@ -213,7 +147,7 @@ export default function GamePage() {
   };
 
   const handleAcknowledge = () => {
-    acknowledgeRole();
+    acknowledgeRoleAsync().catch(() => {});
   };
 
   const formatTime = (s: number) => {
@@ -222,14 +156,27 @@ export default function GamePage() {
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  if (!sessionMyRole) {
-    navigate('/', { replace: true });
-    return null;
+  if (loading) {
+    return (
+      <div className="game-loading">
+        <Loader size={48} />
+      </div>
+    );
   }
 
-  const roleName = sessionMyRole.name;
-  const roleImage = roleImages[roleName] || cardBackImage;
-  const roleDesc = roleDescriptions[roleName] || 'Роль без описания способностей.';
+  if (loadError || !myRole) {
+    return (
+      <div className="game-error">
+        <p>{loadError || 'Не удалось загрузить игру'}</p>
+        <Button onClick={() => navigate('/', { replace: true })}>На главную</Button>
+      </div>
+    );
+  }
+
+  const roleInfo = getRoleInfo(myRole);
+  const roleImage = roleInfo?.image ?? CARD_BACK_IMAGE;
+  const roleDesc = roleInfo?.description ?? 'Роль без описания способностей.';
+  const nightAction = myRole.abilities?.night_action;
 
   // Render based on current screen
   const renderScreen = () => {
@@ -258,7 +205,7 @@ export default function GamePage() {
               <div className={`role-card ${flipped ? 'role-card--flipped' : ''}`} onClick={handleFlip}>
                 <div className="role-card__inner">
                   <div className="role-card__back">
-                    <img src={cardBackImage} alt="Card back" className="role-card__back-img" />
+                    <img src={CARD_BACK_IMAGE} alt="Card back" className="role-card__back-img" />
                   </div>
                   <div className="role-card__front">
                     <img src={roleImage} alt="Role" className="role-card__front-img" />
@@ -273,48 +220,32 @@ export default function GamePage() {
                 <div className="role-abilities__card">
                   <h3 className="role-abilities__title">Способности</h3>
                   <p className="role-abilities__text">{roleDesc}</p>
-                  {sessionMyRole.abilities?.night_action && (
+                  {nightAction && (
                     <div className="role-abilities__action">
-                      <NightActionIcon action={sessionMyRole.abilities.night_action} />
+                      <NightActionIcon action={nightAction} />
                       <span className="role-abilities__action-text">
-                        Ночное действие: {
-                          sessionMyRole.abilities.night_action === 'kill' ? 'Убийство' :
-                          sessionMyRole.abilities.night_action === 'check' ? 'Проверка' :
-                          'Лечение'
-                        }
+                        Ночное действие: {actionLabel(nightAction)}
                       </span>
                     </div>
                   )}
                 </div>
               </div>
 
-              {flipped && !sessionAcknowledged && (
+              {flipped && !acknowledged && (
                 <div className="role-acknowledge">
                   <Button onClick={handleAcknowledge}>Ознакомлен</Button>
                 </div>
               )}
 
-              {sessionAcknowledged && !allReady && (
+              {acknowledged && (
                 <div className="role-waiting">
                   <div className="role-waiting__counter">
-                    <span className="role-waiting__count">{sessionAcknowledgedCount}</span>
+                    <span className="role-waiting__count">{acknowledgedCount}</span>
                     <span className="role-waiting__separator">/</span>
-                    <span className="role-waiting__total">{sessionTotalPlayers}</span>
+                    <span className="role-waiting__total">{totalPlayers}</span>
                   </div>
                   <p className="role-waiting__text">Ожидание остальных игроков...</p>
                   <Loader size={32} />
-                </div>
-              )}
-
-              {allReady && (
-                <div className="role-all-ready">
-                  <div className="role-all-ready__check">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  </div>
-                  <p className="role-all-ready__text">Все игроки ознакомились с ролями!</p>
-                  <p className="role-all-ready__hint">Игра скоро начнётся...</p>
                 </div>
               )}
             </main>

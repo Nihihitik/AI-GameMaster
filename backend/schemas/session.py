@@ -5,8 +5,11 @@ from pydantic import BaseModel, Field, field_validator
 
 class RoleConfig(BaseModel):
     mafia: int = Field(ge=1)
-    sheriff: int = Field(ge=0, le=1)
-    doctor: int = Field(ge=0, le=1)
+    sheriff: int = Field(default=0, ge=0, le=1)
+    doctor: int = Field(default=0, ge=0, le=1)
+    don: int = Field(default=0, ge=0, le=1)
+    lover: int = Field(default=0, ge=0, le=1)
+    maniac: int = Field(default=0, ge=0, le=1)
 
 
 class SessionSettings(BaseModel):
@@ -20,6 +23,15 @@ class SessionSettings(BaseModel):
 class CreateSessionRequest(BaseModel):
     player_count: int = Field(ge=5, le=20)
     settings: SessionSettings
+    host_name: str | None = Field(default=None, max_length=32)
+
+    @field_validator("host_name")
+    @classmethod
+    def strip_host_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        return s[:32] if s else None
 
 
 class SessionResponse(BaseModel):
@@ -37,6 +49,7 @@ class PlayerInList(BaseModel):
     name: str
     join_order: int
     is_host: bool
+    is_me: bool = False
 
 
 class SessionDetailResponse(BaseModel):

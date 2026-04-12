@@ -7,26 +7,27 @@ export interface ApiErrorResponse {
 }
 
 /**
- * Все известные коды ошибок.
+ * Все известные коды ошибок (синхронизировано с backend §10).
  * Используются для условной логики на клиенте (показ конкретного сообщения, редирект).
  */
 export type ErrorCode =
-  | 'validation_error'
-  | 'invalid_role_config'
-  | 'insufficient_players'
-  | 'invalid_target'
-  | 'token_expired'
-  | 'token_invalid'
+  | 'email_already_registered'
   | 'invalid_credentials'
-  | 'not_host'
-  | 'pro_required'
-  | 'wrong_phase'
-  | 'player_dead'
+  | 'token_invalid'
+  | 'token_expired'
+  | 'validation_error'
   | 'session_not_found'
   | 'player_not_found'
-  | 'already_joined'
   | 'session_full'
   | 'game_already_started'
+  | 'not_host'
+  | 'wrong_phase'
+  | 'confirmation_required'
+  | 'invalid_role_config'
+  | 'pro_required'
+  | 'player_dead'
+  | 'invalid_target'
   | 'action_already_submitted'
-  | 'game_not_finished'
-  | 'internal_error';
+  | 'game_paused'
+  | 'internal_error'
+  | 'already_joined';

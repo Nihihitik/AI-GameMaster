@@ -1,14 +1,19 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
-import { mockUserProfile } from '../mocks/authMocks';
+import { authApi } from '../api/authApi';
+import { subscriptionsApi } from '../api/subscriptionsApi';
+import { SubscriptionStatusResponse } from '../types/api';
+import { parseApiError } from '../utils/parseApiError';
+import { ERROR_MESSAGES } from '../utils/constants';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import './ProfilePage.scss';
 
 export default function ProfilePage() {
   const navigate = useNavigate();
-  const user = useAuthStore((s) => s.user) || mockUserProfile;
+  const user = useAuthStore((s) => s.user);
+  const setUser = useAuthStore((s) => s.setUser);
   const logout = useAuthStore((s) => s.logout);
 
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -18,7 +23,40 @@ export default function ProfilePage() {
   const [passwordSuccess, setPasswordSuccess] = useState('');
   const [isChangingPassword, setIsChangingPassword] = useState(false);
 
+  // Подписка
+  const [subscription, setSubscription] = useState<SubscriptionStatusResponse | null>(null);
+  const [subscriptionLoading, setSubscriptionLoading] = useState(false);
+
+  // Inline-edit nickname
+  const [isEditingNickname, setIsEditingNickname] = useState(false);
+  const [nicknameDraft, setNicknameDraft] = useState('');
+  const [nicknameError, setNicknameError] = useState('');
+  const [nicknameSaving, setNicknameSaving] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Загружаем статус подписки при монтировании
+  useEffect(() => {
+    let cancelled = false;
+    setSubscriptionLoading(true);
+    subscriptionsApi
+      .me()
+      .then(({ data }) => {
+        if (!cancelled) setSubscription(data);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          // Тихо игнорируем — показываем fallback (free) из профиля
+          console.warn('Failed to load subscription status', parseApiError(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setSubscriptionLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleAvatarClick = () => {
     fileInputRef.current?.click();
@@ -49,7 +87,7 @@ export default function ProfilePage() {
     }
 
     setIsChangingPassword(true);
-    // Mock: simulate API call
+    // TODO: бэк пока не предоставляет эндпоинт смены пароля — оставляем заглушку.
     setTimeout(() => {
       setIsChangingPassword(false);
       setPasswordSuccess('Пароль успешно изменён');
@@ -58,12 +96,66 @@ export default function ProfilePage() {
     }, 1000);
   };
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/auth', { replace: true });
   };
 
-  const isPro = user.has_pro;
+  const startEditNickname = () => {
+    setNicknameDraft(user?.nickname ?? '');
+    setNicknameError('');
+    setIsEditingNickname(true);
+  };
+
+  const cancelEditNickname = () => {
+    setIsEditingNickname(false);
+    setNicknameError('');
+  };
+
+  const saveNickname = async () => {
+    const trimmed = nicknameDraft.trim();
+    if (trimmed.length < 1 || trimmed.length > 32) {
+      setNicknameError('Никнейм должен быть от 1 до 32 символов');
+      return;
+    }
+    setNicknameSaving(true);
+    setNicknameError('');
+    try {
+      const { data } = await authApi.updateNickname({ nickname: trimmed });
+      setUser(data);
+      setIsEditingNickname(false);
+    } catch (err) {
+      const parsed = parseApiError(err);
+      setNicknameError(ERROR_MESSAGES[parsed.code] || parsed.message);
+    } finally {
+      setNicknameSaving(false);
+    }
+  };
+
+  // Если пользователь не загружен — не рендерим приватные данные.
+  if (!user) {
+    return (
+      <div className="profile-page">
+        <header className="profile-header">
+          <button className="profile-header__back" onClick={() => navigate(-1)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+          <h1 className="profile-header__title">Профиль</h1>
+          <div className="profile-header__spacer" />
+        </header>
+        <main className="profile-main">
+          <p style={{ textAlign: 'center', color: '#888' }}>Загрузка профиля...</p>
+        </main>
+      </div>
+    );
+  }
+
+  // Определяем Pro: сначала из subscription ответа, затем из user.has_pro.
+  const isPro = subscription
+    ? subscription.plan === 'pro' && subscription.status === 'active'
+    : user.has_pro;
 
   return (
     <div className="profile-page">
@@ -106,6 +198,49 @@ export default function ProfilePage() {
             style={{ display: 'none' }}
           />
           <p className="profile-avatar__hint">Нажмите, чтобы изменить аватар</p>
+        </div>
+
+        {/* Nickname Section */}
+        <div className="profile-section">
+          <div className="profile-section__header">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="12" cy="8" r="4" />
+              <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
+            </svg>
+            <span className="profile-section__label">Никнейм</span>
+          </div>
+          {isEditingNickname ? (
+            <div className="profile-password-form">
+              <Input
+                type="text"
+                label="Никнейм"
+                value={nicknameDraft}
+                onChange={setNicknameDraft}
+                error={nicknameError}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button
+                  onClick={saveNickname}
+                  loading={nicknameSaving}
+                  disabled={nicknameSaving}
+                >
+                  Сохранить
+                </Button>
+                <Button onClick={cancelEditNickname} disabled={nicknameSaving}>
+                  Отмена
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div
+              className="profile-section__value"
+              onClick={startEditNickname}
+              style={{ cursor: 'pointer' }}
+              title="Нажмите, чтобы изменить никнейм"
+            >
+              {user.nickname}
+            </div>
+          )}
         </div>
 
         {/* Email Section */}
@@ -161,7 +296,7 @@ export default function ProfilePage() {
           <div className="profile-subscription__header">
             <h2 className="profile-subscription__title">Подписка</h2>
             <span className={`profile-subscription__badge ${isPro ? 'profile-subscription__badge--pro' : ''}`}>
-              {isPro ? 'PRO' : 'Обычная'}
+              {subscriptionLoading ? '...' : isPro ? 'PRO' : 'Обычная'}
             </span>
           </div>
 

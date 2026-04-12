@@ -31,15 +31,38 @@ from services.ws_manager import ws_manager
 router = APIRouter()
 
 
-def _validate_role_config(player_count: int, role_config: dict) -> None:
+def _validate_role_config(player_count: int, role_config: dict) -> int:
+    """Валидирует конфигурацию ролей и возвращает итоговое число мирных.
+
+    Баланс:
+      mafia_count = mafia + don
+      city_count  = player_count - mafia_count - maniac
+    Требуется: mafia_count >= 1 и mafia_count < city_count.
+    Маньяк — отдельная команда, но в балансе "мафия vs. город" считается
+    отдельно от города (он не союзник ни тем, ни другим).
+    """
     mafia = int(role_config.get("mafia", 0))
+    don = int(role_config.get("don", 0))
     sheriff = int(role_config.get("sheriff", 0))
     doctor = int(role_config.get("doctor", 0))
-    if mafia + sheriff + doctor > player_count:
-        raise GameError(400, "invalid_role_config", "Некорректная конфигурация ролей")
-    city = player_count - mafia
-    if mafia >= city:
+    lover = int(role_config.get("lover", 0))
+    maniac = int(role_config.get("maniac", 0))
+
+    mafia_count = mafia + don
+    if mafia_count < 1:
+        raise GameError(400, "invalid_role_config", "Должна быть хотя бы одна мафия")
+
+    city_count = player_count - mafia_count - maniac
+    if city_count <= 0:
+        raise GameError(400, "invalid_role_config", "Недостаточно мест для города")
+    if mafia_count >= city_count:
         raise GameError(400, "invalid_role_config", "Мафия должна быть строго меньше города")
+
+    civilian = player_count - mafia - don - sheriff - doctor - lover - maniac
+    if civilian < 0:
+        raise GameError(400, "invalid_role_config", "Некорректная конфигурация ролей")
+
+    return civilian
 
 
 async def _has_pro(db: AsyncSession, user_id: uuid.UUID) -> bool:
@@ -65,8 +88,7 @@ async def create_session(
         raise GameError(403, "pro_required", "Для этого количества игроков нужна подписка Pro")
 
     role_cfg = payload.settings.role_config.model_dump()
-    _validate_role_config(payload.player_count, role_cfg)
-    civilian = payload.player_count - role_cfg["mafia"] - role_cfg["sheriff"] - role_cfg["doctor"]
+    civilian = _validate_role_config(payload.player_count, role_cfg)
 
     settings = payload.settings.model_dump()
     settings["role_config"] = {**role_cfg, "civilian": civilian}
@@ -81,6 +103,37 @@ async def create_session(
         settings=settings,
     )
     db.add(session)
+    await db.flush()  # получаем session.id до создания Player, чтобы FK был валиден
+
+    # Хост автоматически становится первым игроком лобби.
+    host_display_name = (payload.host_name or current_user.display_name or "").strip()
+    if not host_display_name:
+        host_display_name = current_user.email.split("@")[0]
+    host_display_name = host_display_name[:32]
+
+    host_player = Player(
+        id=uuid.uuid4(),
+        session_id=session.id,
+        user_id=current_user.id,
+        name=host_display_name,
+        join_order=1,
+        status="alive",
+        role_id=None,
+    )
+    db.add(host_player)
+    db.add(
+        GameEvent(
+            id=uuid.uuid4(),
+            session_id=session.id,
+            phase_id=None,
+            event_type="player_joined",
+            payload={
+                "player_id": str(host_player.id),
+                "name": host_player.name,
+                "join_order": host_player.join_order,
+            },
+        )
+    )
     await db.commit()
 
     return SessionResponse(
@@ -114,6 +167,7 @@ async def get_session_by_code(
             name=p.name,
             join_order=p.join_order,
             is_host=(p.user_id == session.host_user_id),
+            is_me=(p.user_id == current_user.id),
         )
         for p in sorted(session.players, key=lambda x: x.join_order)
     ]

@@ -1,59 +1,66 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
-import { submitVote } from '../../mocks/mockGameEngine';
 import './DayVotingScreen.scss';
 
 export default function DayVotingScreen() {
   const availableTargets = useGameStore((s) => s.availableTargets);
   const voteSubmitted = useGameStore((s) => s.voteSubmitted);
-  useGameStore((s) => s.voteTarget);
   const votes = useGameStore((s) => s.votes);
   const myStatus = useGameStore((s) => s.myStatus);
   const dayBlockedPlayer = useGameStore((s) => s.dayBlockedPlayer);
   const myPlayerId = useGameStore((s) => s.myPlayerId);
+  const submitVote = useGameStore((s) => s.submitVote);
+  const phase = useGameStore((s) => s.phase);
   const votingTimer = useSessionStore((s) => s.settings.voting_timer_seconds);
 
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState(votingTimer);
+  const [submitting, setSubmitting] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isBlocked = myPlayerId === dayBlockedPlayer;
   const canVote = myStatus === 'alive' && !isBlocked && !voteSubmitted;
 
+  // Pull timer from phase when available, otherwise fall back to settings.
   useEffect(() => {
-    setTimeLeft(votingTimer);
-  }, [votingTimer]);
+    const seconds = phase?.timer_seconds ?? votingTimer;
+    setTimeLeft(seconds);
+  }, [phase?.id, phase?.timer_seconds, votingTimer]);
 
   useEffect(() => {
     if (timeLeft <= 0 || voteSubmitted) {
       if (intervalRef.current) clearInterval(intervalRef.current);
-      if (timeLeft <= 0 && !voteSubmitted) {
-        submitVote(null);
-      }
       return;
     }
     intervalRef.current = setInterval(() => {
-      setTimeLeft((t) => {
-        if (t <= 1) {
-          if (!voteSubmitted) submitVote(null);
-          return 0;
-        }
-        return t - 1;
-      });
+      setTimeLeft((t) => (t <= 1 ? 0 : t - 1));
     }, 1000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeLeft, voteSubmitted]);
 
-  const handleConfirmVote = () => {
-    if (!canVote) return;
-    submitVote(selectedTarget);
+  const handleConfirmVote = async () => {
+    if (!canVote || !selectedTarget || submitting) return;
+    setSubmitting(true);
+    try {
+      await submitVote(selectedTarget);
+    } catch {
+      // Keep the button enabled so the user can retry.
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleSkipVote = () => {
-    if (!canVote) return;
-    submitVote(null);
+  const handleSkipVote = async () => {
+    if (!canVote || submitting) return;
+    setSubmitting(true);
+    try {
+      await submitVote(null);
+    } catch {
+      // Swallow.
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const formatTime = (s: number) => {
@@ -141,14 +148,14 @@ export default function DayVotingScreen() {
       <div className="day-voting__actions">
         <button
           className="day-voting__confirm"
-          disabled={!selectedTarget || !canVote}
+          disabled={!selectedTarget || !canVote || submitting}
           onClick={handleConfirmVote}
         >
           Подтвердить
         </button>
         <button
           className="day-voting__skip"
-          disabled={!canVote}
+          disabled={!canVote || submitting}
           onClick={handleSkipVote}
         >
           Пропустить голос

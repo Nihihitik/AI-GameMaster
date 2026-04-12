@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import Input from '../ui/Input';
 import Button, { LinkButton } from '../ui/Button';
 import { authApi } from '../../api/authApi';
 import { useAuthStore } from '../../stores/authStore';
 import { parseApiError } from '../../utils/parseApiError';
+import { ERROR_MESSAGES } from '../../utils/constants';
 
 interface RegisterFormProps {
   onToggle: () => void;
@@ -14,14 +14,15 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function RegisterForm({ onToggle }: RegisterFormProps) {
   const [email, setEmail] = useState('');
+  const [nickname, setNickname] = useState('');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [emailError, setEmailError] = useState('');
+  const [nicknameError, setNicknameError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [serverError, setServerError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
-  
+
   // Get individual store functions to prevent unnecessary re-renders
   const setTokens = useAuthStore((s) => s.setTokens);
   const setUser = useAuthStore((s) => s.setUser);
@@ -36,6 +37,20 @@ export default function RegisterForm({ onToggle }: RegisterFormProps) {
       return false;
     }
     setEmailError('');
+    return true;
+  };
+
+  const validateNickname = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setNicknameError('');
+      return false;
+    }
+    if (trimmed.length < 1 || trimmed.length > 32) {
+      setNicknameError('Никнейм должен быть от 1 до 32 символов');
+      return false;
+    }
+    setNicknameError('');
     return true;
   };
 
@@ -58,17 +73,28 @@ export default function RegisterForm({ onToggle }: RegisterFormProps) {
     else setEmailError('');
   };
 
+  const handleNicknameChange = (value: string) => {
+    setNickname(value);
+    if (value) validateNickname(value);
+    else setNicknameError('');
+  };
+
   const handlePasswordChange = (value: string) => {
     setPassword(value);
     if (value) validatePassword(value);
     else setPasswordError('');
   };
 
+  const trimmedNickname = nickname.trim();
+
   const isFormValid =
     email.trim().length > 0 &&
+    trimmedNickname.length >= 1 &&
+    trimmedNickname.length <= 32 &&
     password.length > 0 &&
     password === passwordConfirm &&
     !emailError &&
+    !nicknameError &&
     !passwordError;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -76,8 +102,9 @@ export default function RegisterForm({ onToggle }: RegisterFormProps) {
     if (!isFormValid || loading) return;
 
     const emailOk = validateEmail(email);
+    const nicknameOk = validateNickname(nickname);
     const passOk = validatePassword(password);
-    if (!emailOk || !passOk) return;
+    if (!emailOk || !nicknameOk || !passOk) return;
 
     setServerError(null);
     setLoading(true);
@@ -86,24 +113,20 @@ export default function RegisterForm({ onToggle }: RegisterFormProps) {
       const { data } = await authApi.register({
         email: email.trim(),
         password,
+        nickname: trimmedNickname,
       });
       setTokens(data.access_token, data.refresh_token);
-      // AuthPage will handle redirect
-    } catch (err) {
-      // Mock Registration Fallback for testing frontend without backend
-      console.warn('Backend registration failed, using mock registration for testing', err);
-      
-      // Set fake tokens
-      setTokens('mock_access_token', 'mock_refresh_token');
-      
-      // Set fake user profile
       setUser({
-        user_id: 'mock-user-123',
-        email: email.trim(),
+        user_id: data.user_id,
+        email: data.email,
+        nickname: data.nickname,
         has_pro: false,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
       });
       // AuthPage will handle redirect
+    } catch (err) {
+      const parsed = parseApiError(err);
+      setServerError(ERROR_MESSAGES[parsed.code] || parsed.message);
     } finally {
       setLoading(false);
     }
@@ -118,6 +141,15 @@ export default function RegisterForm({ onToggle }: RegisterFormProps) {
         onChange={handleEmailChange}
         error={emailError}
         autoComplete="email"
+      />
+
+      <Input
+        type="text"
+        label="Никнейм"
+        value={nickname}
+        onChange={handleNicknameChange}
+        error={nicknameError}
+        autoComplete="nickname"
       />
 
       <Input

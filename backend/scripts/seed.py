@@ -18,8 +18,11 @@ from models.role import Role
 
 SEED_ROLES = [
     {"slug": "mafia", "name": "Мафия", "team": "mafia", "abilities": {"night_action": "kill"}},
+    {"slug": "don", "name": "Дон", "team": "mafia", "abilities": {"night_action": "don_check"}},
     {"slug": "sheriff", "name": "Шериф", "team": "city", "abilities": {"night_action": "check"}},
     {"slug": "doctor", "name": "Доктор", "team": "city", "abilities": {"night_action": "heal"}},
+    {"slug": "lover", "name": "Любовница", "team": "city", "abilities": {"night_action": "lover_visit"}},
+    {"slug": "maniac", "name": "Маньяк", "team": "maniac", "abilities": {"night_action": "maniac_kill"}},
     {"slug": "civilian", "name": "Мирный", "team": "city", "abilities": {"night_action": None}},
 ]
 

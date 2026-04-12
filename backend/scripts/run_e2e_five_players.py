@@ -137,7 +137,10 @@ async def _play_night_round(
     session_id: str,
     users: list[dict],
 ) -> None:
-    order = ("kill", "heal", "check")
+    # Порядок совпадает с execute_night_sequence в game_engine.py.
+    # Оставляем старые три + новые (don_check, lover_visit, maniac_kill)
+    # для универсальности: e2e переживает и 5-, и 7-игрочные сессии.
+    order = ("lover_visit", "kill", "don_check", "check", "heal", "maniac_kill")
     for action_type in order:
         for _ in range(40):
             progressed = False
@@ -217,23 +220,39 @@ async def main() -> int:
     password = os.environ.get("E2E_PASSWORD", "e2etest!1")
     suffix = uuid.uuid4().hex[:10]
 
+    # E2E_PLAYER_COUNT=5 (default) — классическая 5-игрочная.
+    # E2E_PLAYER_COUNT=7 — расширенная с don / lover / maniac.
+    player_count = int(os.environ.get("E2E_PLAYER_COUNT", "5"))
+
     t = httpx.Timeout(http_timeout, connect=min(30.0, http_timeout))
     async with httpx.AsyncClient(base_url=base, timeout=t) as client:
         users: list[dict] = []
-        for i in range(5):
+        for i in range(player_count):
             email = f"e2e_{suffix}_{i}@example.com"
             token = await _register(client, email, password)
             users.append({"email": email, "token": token, "label": f"P{i + 1}"})
 
+        if player_count == 7:
+            role_config = {
+                "mafia": 1,
+                "don": 1,
+                "sheriff": 1,
+                "doctor": 1,
+                "lover": 1,
+                "maniac": 1,
+            }
+        else:
+            role_config = {"mafia": 1, "sheriff": 1, "doctor": 1}
+
         host = users[0]
         create_body = {
-            "player_count": 5,
+            "player_count": player_count,
             "settings": {
                 "role_reveal_timer_seconds": 10,
                 "discussion_timer_seconds": 30,
                 "voting_timer_seconds": 15,
                 "night_action_timer_seconds": 15,
-                "role_config": {"mafia": 1, "sheriff": 1, "doctor": 1},
+                "role_config": role_config,
             },
         }
         r = await client.post("/api/sessions", json=create_body, headers=_hdr(host["token"]))

@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import Input from '../ui/Input';
 import Button, { LinkButton } from '../ui/Button';
 import { authApi } from '../../api/authApi';
 import { useAuthStore } from '../../stores/authStore';
 import { parseApiError } from '../../utils/parseApiError';
+import { ERROR_MESSAGES } from '../../utils/constants';
 
 interface LoginFormProps {
   onToggle: () => void;
@@ -15,8 +15,7 @@ export default function LoginForm({ onToggle }: LoginFormProps) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
-  
+
   // Get individual store functions to prevent unnecessary re-renders
   const setTokens = useAuthStore((s) => s.setTokens);
   const setUser = useAuthStore((s) => s.setUser);
@@ -33,22 +32,17 @@ export default function LoginForm({ onToggle }: LoginFormProps) {
     try {
       const { data } = await authApi.login({ email: email.trim(), password });
       setTokens(data.access_token, data.refresh_token);
-      // AuthPage will handle redirect
-    } catch (err) {
-      // Mock Login Fallback for testing frontend without backend
-      console.warn('Backend login failed, using mock login for testing', err);
-      
-      // Set fake tokens
-      setTokens('mock_access_token', 'mock_refresh_token');
-      
-      // Set fake user profile
       setUser({
-        user_id: 'mock-user-123',
-        email: email.trim(),
+        user_id: data.user_id,
+        email: data.email,
+        nickname: data.nickname,
         has_pro: false,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
       });
       // AuthPage will handle redirect
+    } catch (err) {
+      const parsed = parseApiError(err);
+      setError(ERROR_MESSAGES[parsed.code] || parsed.message);
     } finally {
       setLoading(false);
     }

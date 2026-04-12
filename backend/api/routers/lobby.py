@@ -9,6 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user, get_db
+from api.routers.sessions import _validate_role_config
 from core.exceptions import GameError
 from models.game_event import GameEvent
 from models.player import Player
@@ -41,6 +42,7 @@ async def list_players(
             name=p.name,
             join_order=p.join_order,
             is_host=(p.user_id == session.host_user_id),
+            is_me=(p.user_id == current_user.id),
         )
         for p in sorted(players, key=lambda x: x.join_order)
     ]
@@ -194,14 +196,7 @@ async def update_settings(
     # role_config валидация (если передана)
     if patch.get("role_config") is not None:
         rc = patch["role_config"]
-        mafia = int(rc.get("mafia", 0))
-        sheriff = int(rc.get("sheriff", 0))
-        doctor = int(rc.get("doctor", 0))
-        if mafia + sheriff + doctor > session.player_count:
-            raise GameError(400, "invalid_role_config", "Некорректная конфигурация ролей")
-        if mafia >= (session.player_count - mafia):
-            raise GameError(400, "invalid_role_config", "Мафия должна быть строго меньше города")
-        civilian = session.player_count - mafia - sheriff - doctor
+        civilian = _validate_role_config(session.player_count, rc)
         patch["role_config"] = {**rc, "civilian": civilian}
 
     session.settings = {**current, **patch}

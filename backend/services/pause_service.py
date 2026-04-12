@@ -54,6 +54,10 @@ async def pause_game(db: AsyncSession, session: Session) -> dict:
         "night_turn": rt.night_turn,
         "mafia_choice_target": str(rt.mafia_choice_target) if rt.mafia_choice_target else None,
         "mafia_choice_by": str(rt.mafia_choice_by) if rt.mafia_choice_by else None,
+        "maniac_choice_target": str(rt.maniac_choice_target) if rt.maniac_choice_target else None,
+        "lover_last_target": str(rt.lover_last_target) if rt.lover_last_target else None,
+        "day_blocked_player": str(rt.day_blocked_player) if rt.day_blocked_player else None,
+        "blocked_tonight": [str(x) for x in rt.blocked_tonight],
     }
 
     settings = {**cur, PAUSE_KEY: {"paused": True, "snapshot": snap}}
@@ -106,20 +110,26 @@ async def resume_game(session_id: uuid.UUID) -> None:
     if rem is None or rem < 1:
         rem = 1
 
-    if snap.get("mafia_choice_target"):
+    def _safe_uuid(raw) -> uuid.UUID | None:
+        if raw is None:
+            return None
         try:
-            rt.mafia_choice_target = uuid.UUID(str(snap["mafia_choice_target"]))
+            return uuid.UUID(str(raw))
         except Exception:
-            rt.mafia_choice_target = None
-    else:
-        rt.mafia_choice_target = None
-    if snap.get("mafia_choice_by"):
-        try:
-            rt.mafia_choice_by = uuid.UUID(str(snap["mafia_choice_by"]))
-        except Exception:
-            rt.mafia_choice_by = None
-    else:
-        rt.mafia_choice_by = None
+            return None
+
+    rt.mafia_choice_target = _safe_uuid(snap.get("mafia_choice_target"))
+    rt.mafia_choice_by = _safe_uuid(snap.get("mafia_choice_by"))
+    rt.maniac_choice_target = _safe_uuid(snap.get("maniac_choice_target"))
+    rt.lover_last_target = _safe_uuid(snap.get("lover_last_target"))
+    rt.day_blocked_player = _safe_uuid(snap.get("day_blocked_player"))
+
+    restored_blocked: set[uuid.UUID] = set()
+    for item in snap.get("blocked_tonight", []) or []:
+        u = _safe_uuid(item)
+        if u is not None:
+            restored_blocked.add(u)
+    rt.blocked_tonight = restored_blocked
 
     if ptype == "role_reveal":
         from services.game_engine import transition_to_night

@@ -17,7 +17,7 @@ class Role(Base):
     __tablename__ = "roles"
 
     __table_args__ = (
-        CheckConstraint("team IN ('mafia', 'city')", name="ck_roles_team"),
+        CheckConstraint("team IN ('mafia', 'city', 'maniac')", name="ck_roles_team"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

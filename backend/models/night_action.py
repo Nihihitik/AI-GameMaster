@@ -16,7 +16,10 @@ class NightAction(Base):
 
     __table_args__ = (
         UniqueConstraint("phase_id", "actor_player_id", name="uq_night_actions_phase_actor"),
-        CheckConstraint("action_type IN ('kill', 'check', 'heal')", name="ck_night_actions_type"),
+        CheckConstraint(
+            "action_type IN ('kill', 'check', 'heal', 'don_check', 'lover_visit', 'maniac_kill')",
+            name="ck_night_actions_type",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -31,7 +34,7 @@ class NightAction(Base):
     target_player_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("players.id"), nullable=False
     )
-    action_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    action_type: Mapped[str] = mapped_column(String(15), nullable=False)
     was_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     phase: Mapped["GamePhase"] = relationship(back_populates="night_actions")

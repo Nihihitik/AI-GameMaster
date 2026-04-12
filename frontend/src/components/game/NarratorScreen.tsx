@@ -2,12 +2,29 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import './NarratorScreen.scss';
 
+/**
+ * NarratorScreen is a client-side announcer. It reads the latest announcement
+ * (its `trigger` drives local text/audio selection) from gameStore and
+ * optionally consumes pre-queued narrator texts for scripted transitions.
+ *
+ * Incoming WS `announcement` events write to gameStore.currentAnnouncement via
+ * `queueAnnouncement`; this component displays the text.
+ */
 export default function NarratorScreen() {
   const narratorTexts = useGameStore((s) => s.narratorTexts);
   const narratorIndex = useGameStore((s) => s.narratorIndex);
   const advanceNarrator = useGameStore((s) => s.advanceNarrator);
+  const currentAnnouncement = useGameStore((s) => s.currentAnnouncement);
 
-  const currentText = narratorTexts[narratorIndex] || '';
+  // Prefer explicit narrator texts if present; otherwise fall back to the latest announcement.
+  const effectiveTexts = narratorTexts.length > 0
+    ? narratorTexts
+    : currentAnnouncement?.text
+      ? [currentAnnouncement.text]
+      : [];
+  const effectiveIndex = narratorTexts.length > 0 ? narratorIndex : 0;
+
+  const currentText = effectiveTexts[effectiveIndex] || '';
   const [displayedChars, setDisplayedChars] = useState(0);
   const [isTyping, setIsTyping] = useState(true);
   const [autoMode, setAutoMode] = useState(false);
@@ -16,12 +33,12 @@ export default function NarratorScreen() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isLastText = narratorIndex >= narratorTexts.length - 1;
+  const isLastText = effectiveIndex >= effectiveTexts.length - 1;
 
   useEffect(() => {
     setDisplayedChars(0);
     setIsTyping(true);
-  }, [narratorIndex, currentText]);
+  }, [effectiveIndex, currentText]);
 
   useEffect(() => {
     if (!isTyping || displayedChars >= currentText.length) {
@@ -71,9 +88,9 @@ export default function NarratorScreen() {
     }
   }, [isTyping, currentText.length, advanceNarrator]);
 
-  const progress = narratorTexts.length > 1
-    ? ((narratorIndex + 1) / narratorTexts.length) * 100
-    : displayedChars > 0 ? (displayedChars / currentText.length) * 100 : 0;
+  const progress = effectiveTexts.length > 1
+    ? ((effectiveIndex + 1) / effectiveTexts.length) * 100
+    : displayedChars > 0 ? (displayedChars / Math.max(1, currentText.length)) * 100 : 0;
 
   return (
     <div className="narrator-screen" onClick={handleTap}>
@@ -97,7 +114,7 @@ export default function NarratorScreen() {
           <p className="narrator-screen__text">
             {currentText.split('').map((char, i) => (
               <span
-                key={`${narratorIndex}-${i}`}
+                key={`${effectiveIndex}-${i}`}
                 className={`narrator-char ${i < displayedChars ? 'narrator-char--visible' : ''}`}
               >
                 {char}
@@ -117,9 +134,9 @@ export default function NarratorScreen() {
           }
         </div>
 
-        {narratorTexts.length > 1 && (
+        {effectiveTexts.length > 1 && (
           <div className="narrator-screen__counter">
-            {narratorIndex + 1} / {narratorTexts.length}
+            {effectiveIndex + 1} / {effectiveTexts.length}
           </div>
         )}
       </div>
