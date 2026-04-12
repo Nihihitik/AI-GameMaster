@@ -1,0 +1,142 @@
+.mafia-btn {
+  position: relative;
+  display: inline-block;
+  font-family: 'Inter', 'Segoe UI', Roboto, sans-serif;
+  font-weight: 600;
+  font-size: 16px;
+  color: #ffffff;
+  background: #0a0a0a;
+  border: none;
+  cursor: pointer;
+  border-radius: 20px;
+  padding: 0;
+  box-shadow: 0 4px 20px rgba(200, 30, 30, 0.15);
+  transition: all 0.3s ease-in-out;
+  width: 100%;
+  overflow: hidden;
+
+  &:hover {
+    transform: scale(1.03);
+    box-shadow: 0 6px 30px rgba(200, 30, 30, 0.3);
+  }
+
+  &:active {
+    transform: scale(0.97);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  &__glow {
+    position: absolute;
+    inset: 0;
+    border-radius: 20px;
+    background: linear-gradient(135deg, #c81e1e, #8b0000, #ff3333, #c81e1e);
+    background-size: 300% 300%;
+    padding: 2px;
+    opacity: 0;
+    transition: opacity 0.5s ease;
+    z-index: 0;
+  }
+
+  &:hover &__glow {
+    opacity: 1;
+    animation: mafia-btn-glow 3s ease infinite;
+  }
+
+  &__content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 0.85em 2em;
+    background: #0a0a0a;
+    border-radius: 20px;
+    transition: all 0.3s ease;
+  }
+
+  &:hover &__content {
+    background: #111111;
+  }
+
+  &__text {
+    transition: all 0.5s ease;
+  }
+
+  &:hover &__text {
+    color: #ff4444;
+    transform: translateX(3px);
+  }
+
+  &__icon {
+    width: 22px;
+    height: 22px;
+    transition: all 0.5s ease;
+
+    svg {
+      width: 100%;
+      height: 100%;
+    }
+  }
+
+  &:hover &__icon {
+    color: #ff4444;
+    transform: translateX(3px);
+  }
+
+  &--loading &__content {
+    gap: 12px;
+  }
+
+  &__spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #c81e1e;
+    border-radius: 50%;
+    animation: mafia-spin 0.6s linear infinite;
+  }
+}
+
+@keyframes mafia-btn-glow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes mafia-spin {
+  to { transform: rotate(360deg); }
+}
+
+.mafia-link-btn {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  font-family: 'Inter', 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 8px 0;
+  transition: color 0.3s ease;
+  text-decoration: none;
+
+  &:hover {
+    color: #ff4444;
+  }
+
+  span {
+    color: #c81e1e;
+    font-weight: 600;
+    margin-left: 4px;
+    transition: color 0.3s ease;
+  }
+
+  &:hover span {
+    color: #ff5555;
+  }
+}
