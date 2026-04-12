@@ -94,6 +94,16 @@ export default function GamePage() {
       try {
         await useGameStore.getState().loadState(sessionId);
         if (cancelled) return;
+        // Сессия уже завершена (F5 после финала или игрок открыл ссылку на
+        // закрытую сессию): у нас нет result для отрисовки финала — сразу
+        // возвращаем пользователя на главную вместо тёмного экрана.
+        const afterLoad = useGameStore.getState();
+        if (afterLoad.screen === 'finale' && !afterLoad.result) {
+          useGameStore.getState().reset();
+          useSessionStore.getState().reset();
+          navigate('/', { replace: true });
+          return;
+        }
         wsClient.connect(sessionId);
       } catch (err: any) {
         if (!cancelled) {

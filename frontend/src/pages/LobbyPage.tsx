@@ -44,6 +44,7 @@ export default function LobbyPage() {
     const current = state.session;
     if (!current) {
       state.reset();
+      wsClient.disconnect();
       return;
     }
     try {
@@ -56,6 +57,7 @@ export default function LobbyPage() {
       // Глушим: если игрока уже нет (404) или сессия уже закрыта — всё равно чистим состояние.
     } finally {
       state.reset();
+      wsClient.disconnect();
     }
   };
 
@@ -113,7 +115,9 @@ export default function LobbyPage() {
 
     return () => {
       cancelled = true;
-      wsClient.disconnect();
+      // WS не рвём в cleanup: при переходе LobbyPage→GamePage соединение
+      // для той же сессии переиспользуется GamePage. Отключение от сессии
+      // (выход в главное меню / закрытие / кик) выполняет leaveSessionIfAny.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);

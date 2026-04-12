@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 import uuid
 from datetime import datetime, timezone
@@ -195,7 +196,9 @@ async def start_game(db: AsyncSession, session: Session) -> None:
         )
 
     async def _on_role_reveal_timeout():
-        await transition_to_night(session.id, 1)
+        # Запускаем как отдельную фоновую задачу, чтобы не блокировать
+        # колбэк таймера собственным await-циклом execute_night_sequence.
+        asyncio.create_task(transition_to_night(session.id, 1))
 
     await timer_service.start_timer(session.id, "role_reveal", timer_seconds, _on_role_reveal_timeout)
 
@@ -268,7 +271,10 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
         await ws_manager.send_to_session(session.id, {"type": "all_acknowledged", "payload": {}})
         # иначе сработает таймер role_reveal и второй раз вызовет transition_to_night → duplicate phase
         await timer_service.cancel_timer(session.id, "role_reveal")
-        await transition_to_night(session.id, 1)
+        # Запускаем переход в ночь как фоновую задачу, чтобы HTTP-handler
+        # acknowledge_role завершился моментально, а не держал соединение
+        # до конца первой ночи (execute_night_sequence делает долгий await-loop).
+        asyncio.create_task(transition_to_night(session.id, 1))
 
     return {"acknowledged": True, "players_acknowledged": acked, "players_total": alive_total}
 

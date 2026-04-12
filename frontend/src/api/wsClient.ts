@@ -74,6 +74,17 @@ class WsClient {
     this.socket.onopen = () => {
       this.reconnectAttempts = 0;
       this.startHeartbeat();
+      // Ре-синк состояния: после (re)connect дергаем /state, чтобы догнать
+      // сообщения, которые backend мог отправить, пока сокет ещё не был в OPEN.
+      const sid = this.currentSessionId;
+      if (sid) {
+        useGameStore
+          .getState()
+          .loadState(sid)
+          .catch((err) => {
+            console.warn('[wsClient] state resync failed', err);
+          });
+      }
     };
 
     this.socket.onclose = (e: CloseEvent) => this.handleClose(e);
@@ -141,6 +152,21 @@ class WsClient {
 
       case 'phase_changed':
         return gameStore.applyPhase?.(msg.payload);
+
+      case 'action_required':
+        return gameStore.applyActionRequired?.(msg.payload);
+
+      case 'action_blocked':
+        return gameStore.applyActionBlocked?.(msg.payload);
+
+      case 'action_timeout':
+        return gameStore.applyActionTimeout?.(msg.payload);
+
+      case 'role_acknowledged':
+        return gameStore.applyRoleAcknowledged?.(msg.payload);
+
+      case 'all_acknowledged':
+        return gameStore.applyAllAcknowledged?.();
 
       case 'night_result':
         return gameStore.applyNightResult?.(msg.payload);

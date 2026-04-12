@@ -254,7 +254,12 @@ async def join_session(
         session.id,
         {
             "type": "player_joined",
-            "payload": {"player_id": str(player.id), "name": player.name, "join_order": join_order},
+            "payload": {
+                "id": str(player.id),
+                "name": player.name,
+                "join_order": join_order,
+                "is_host": False,
+            },
         },
     )
     return JoinResponse(player_id=str(player.id), session_id=str(session.id), join_order=join_order)

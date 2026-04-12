@@ -104,6 +104,11 @@ interface GameState {
   onGameStarted: (payload: any) => void;
   setMyRole: (payload: any) => void;
   applyPhase: (payload: any) => void;
+  applyActionRequired: (payload: any) => void;
+  applyActionBlocked: (payload: any) => void;
+  applyActionTimeout: (payload: any) => void;
+  applyRoleAcknowledged: (payload: any) => void;
+  applyAllAcknowledged: () => void;
   applyNightResult: (payload: any) => void;
   setVoteCounts: (payload: any) => void;
   applyVoteResult: (payload: any) => void;
@@ -221,10 +226,12 @@ export const useGameStore = create<GameState>((set, get) => ({
       actionType,
       actionLabel: actionLabelFor(actionType),
       availableTargets: data.available_targets ?? [],
-      actionSubmitted: data.my_action_submitted,
+      actionSubmitted: data.my_action_submitted || get().actionSubmitted,
       votes: data.votes ?? null,
       dayBlockedPlayer: data.day_blocked_player ?? null,
-      result: data.result ?? null,
+      // Не затираем финальный result при re-sync: /state не возвращает
+      // result, но в памяти он уже мог быть установлен через WS game_finished.
+      result: data.result ?? get().result ?? null,
       nightNumber: phase?.type === 'night' ? phase.number : get().nightNumber,
       dayNumber: phase?.type === 'day' ? phase.number : get().dayNumber,
     });
@@ -303,31 +310,135 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   applyPhase: (payload) => {
     const phase: Phase = payload?.phase ?? payload;
-    const awaitingAction: boolean = payload?.awaiting_action ?? false;
+    const sessionStatus = payload?.session_status;
+    const hasActionData = payload && 'awaiting_action' in payload;
+    const incomingAwaiting: boolean = payload?.awaiting_action ?? false;
+    const incomingActionType: NightActionType | null = payload?.action_type ?? null;
+    const incomingTargets: Target[] = payload?.available_targets ?? [];
+
+    set((state) => {
+      // Finale — терминальный экран. Никакие поздние phase_changed от бэка
+      // (например, при гонке с game_finished) не должны выкинуть игрока обратно
+      // в day/night UI.
+      if (state.screen === 'finale' || state.result) return state;
+
+      const samePhase =
+        state.phase?.type === phase?.type &&
+        state.phase?.number === phase?.number &&
+        state.phase?.sub_phase === phase?.sub_phase;
+      const preserveAction = !hasActionData && samePhase && state.awaitingAction;
+
+      const awaitingAction = hasActionData
+        ? incomingAwaiting
+        : preserveAction
+          ? state.awaitingAction
+          : false;
+      const actionType = hasActionData
+        ? incomingActionType
+        : preserveAction
+          ? state.actionType
+          : null;
+      const availableTargets = hasActionData
+        ? incomingTargets
+        : preserveAction
+          ? state.availableTargets
+          : [];
+      const actionSubmitted = preserveAction ? state.actionSubmitted : false;
+      const selectedTarget = preserveAction ? state.selectedTarget : null;
+
+      const screen = deriveScreen(
+        phase?.type,
+        phase?.sub_phase,
+        awaitingAction,
+        sessionStatus,
+      );
+
+      return {
+        phase,
+        screen,
+        awaitingAction,
+        actionType,
+        actionLabel: actionLabelFor(actionType),
+        availableTargets,
+        selectedTarget,
+        actionSubmitted,
+        voteSubmitted:
+          phase?.type === 'day' && phase?.sub_phase === 'voting' ? false : state.voteSubmitted,
+        voteTarget:
+          phase?.type === 'day' && phase?.sub_phase === 'voting' ? null : state.voteTarget,
+        voteCounts:
+          phase?.type === 'day' && phase?.sub_phase === 'voting' ? {} : state.voteCounts,
+        nightNumber: phase?.type === 'night' ? phase.number : state.nightNumber,
+        dayNumber: phase?.type === 'day' ? phase.number : state.dayNumber,
+      };
+    });
+  },
+
+  applyActionRequired: (payload) => {
     const actionType: NightActionType | null = payload?.action_type ?? null;
     const availableTargets: Target[] = payload?.available_targets ?? [];
-    const sessionStatus = payload?.session_status;
-    const screen = deriveScreen(
-      phase?.type,
-      phase?.sub_phase,
-      awaitingAction,
-      sessionStatus,
-    );
+    set((state) => {
+      if (state.screen === 'finale' || state.result) return state;
+      return {
+        awaitingAction: true,
+        actionType,
+        actionLabel: actionLabelFor(actionType),
+        availableTargets,
+        selectedTarget: null,
+        actionSubmitted: false,
+        screen: state.phase?.type === 'night' ? 'night_action' : state.screen,
+      };
+    });
+  },
+
+  applyActionBlocked: (_payload) => {
+    set((state) => {
+      if (state.screen === 'finale' || state.result) return state;
+      return {
+        awaitingAction: false,
+        actionType: null,
+        actionLabel: '',
+        availableTargets: [],
+        selectedTarget: null,
+        actionSubmitted: false,
+        screen: state.phase?.type === 'night' ? 'night_waiting' : state.screen,
+      };
+    });
+  },
+
+  applyActionTimeout: (payload) => {
+    const TURN_TO_ACTION: Record<string, NightActionType> = {
+      lover: 'lover_visit',
+      mafia: 'kill',
+      don: 'don_check',
+      sheriff: 'check',
+      doctor: 'heal',
+      maniac: 'maniac_kill',
+    };
+    const turnSlug = payload?.action_type as string | undefined;
+    const mappedActionType = turnSlug ? TURN_TO_ACTION[turnSlug] : null;
+    set((state) => {
+      if (!state.awaitingAction) return state;
+      if (mappedActionType && state.actionType === mappedActionType) {
+        return {
+          ...state,
+          awaitingAction: false,
+          selectedTarget: null,
+          screen: 'night_waiting',
+        };
+      }
+      return state;
+    });
+  },
+
+  applyRoleAcknowledged: (payload) => {
+    const acked = Number(payload?.players_acknowledged ?? 0);
+    set({ acknowledgedCount: acked });
+  },
+
+  applyAllAcknowledged: () => {
     set((state) => ({
-      phase,
-      screen,
-      awaitingAction,
-      actionType,
-      actionLabel: actionLabelFor(actionType),
-      availableTargets,
-      selectedTarget: null,
-      actionSubmitted: false,
-      // Reset per-phase local flags as we move forward.
-      voteSubmitted: phase?.type === 'day' && phase?.sub_phase === 'voting' ? false : state.voteSubmitted,
-      voteTarget: phase?.type === 'day' && phase?.sub_phase === 'voting' ? null : state.voteTarget,
-      voteCounts: phase?.type === 'day' && phase?.sub_phase === 'voting' ? {} : state.voteCounts,
-      nightNumber: phase?.type === 'night' ? phase.number : state.nightNumber,
-      dayNumber: phase?.type === 'day' ? phase.number : state.dayNumber,
+      acknowledgedCount: state.totalPlayers,
     }));
   },
 
