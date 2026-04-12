@@ -1,0 +1,235 @@
+.rules-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+  animation: rules-fade-in 0.3s ease;
+}
+
+@keyframes rules-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.rules-modal {
+  background: #0a0a0a;
+  border: 1px solid rgba(200, 30, 30, 0.2);
+  border-radius: 20px;
+  max-width: 500px;
+  width: 100%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: rules-slide-up 0.3s ease;
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 20px 12px;
+  }
+
+  &__title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #ffffff;
+    margin: 0;
+  }
+
+  &__close {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: all 0.3s ease;
+
+    &:hover {
+      border-color: rgba(200, 30, 30, 0.4);
+      color: #ff4444;
+    }
+
+    svg { width: 18px; height: 18px; }
+  }
+
+  &__tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 20px 12px;
+  }
+
+  &__tab {
+    flex: 1;
+    padding: 10px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+
+    &:hover {
+      border-color: rgba(200, 30, 30, 0.3);
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    &--active {
+      background: rgba(200, 30, 30, 0.15);
+      border-color: rgba(200, 30, 30, 0.4);
+      color: #ff4444;
+    }
+  }
+
+  &__body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 20px 20px;
+  }
+}
+
+@keyframes rules-slide-up {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.rules-section {
+  &__title {
+    font-size: 16px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.85);
+    margin: 0 0 12px;
+  }
+
+  &__text {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.55);
+    line-height: 1.7;
+    margin: 0;
+  }
+}
+
+.rules-roles {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rules-role {
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+  transition: all 0.3s ease;
+
+  &--mafia {
+    border-color: rgba(200, 30, 30, 0.15);
+    background: rgba(200, 30, 30, 0.04);
+  }
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  &__name {
+    font-size: 15px;
+    font-weight: 600;
+    color: #ffffff;
+  }
+
+  &__card {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+
+    &--city {
+      background: rgba(34, 197, 94, 0.15);
+      color: #22c55e;
+    }
+
+    &--mafia {
+      background: rgba(200, 30, 30, 0.15);
+      color: #ff4444;
+    }
+  }
+
+  &__desc {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.5);
+    line-height: 1.6;
+    margin: 0;
+  }
+}
+
+.rules-win {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  &__item {
+    padding: 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  &__team {
+    font-size: 15px;
+    font-weight: 600;
+    color: #ffffff;
+    margin: 0 0 6px;
+  }
+
+  &__condition {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.5);
+    line-height: 1.6;
+    margin: 0;
+  }
+}
+
+.rules-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.3s ease;
+  flex-shrink: 0;
+
+  &:hover {
+    border-color: rgba(200, 30, 30, 0.4);
+    color: #ff4444;
+    background: rgba(200, 30, 30, 0.1);
+  }
+
+  svg {
+    width: 20px;
+    height: 20px;
+  }
+}

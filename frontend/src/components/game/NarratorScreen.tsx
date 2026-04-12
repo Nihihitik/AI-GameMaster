@@ -1,0 +1,175 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useGameStore } from '../../stores/gameStore';
+import './NarratorScreen.scss';
+
+export default function NarratorScreen() {
+  const narratorTexts = useGameStore((s) => s.narratorTexts);
+  const narratorIndex = useGameStore((s) => s.narratorIndex);
+  const advanceNarrator = useGameStore((s) => s.advanceNarrator);
+
+  const currentText = narratorTexts[narratorIndex] || '';
+  const [displayedChars, setDisplayedChars] = useState(0);
+  const [isTyping, setIsTyping] = useState(true);
+  const [autoMode, setAutoMode] = useState(false);
+  const [volume, setVolume] = useState(80);
+  const [muted, setMuted] = useState(false);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isLastText = narratorIndex >= narratorTexts.length - 1;
+
+  useEffect(() => {
+    setDisplayedChars(0);
+    setIsTyping(true);
+  }, [narratorIndex, currentText]);
+
+  useEffect(() => {
+    if (!isTyping || displayedChars >= currentText.length) {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      setIsTyping(false);
+      return;
+    }
+
+    intervalRef.current = setInterval(() => {
+      setDisplayedChars((prev) => {
+        if (prev >= currentText.length) {
+          setIsTyping(false);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, 45);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [isTyping, currentText, displayedChars]);
+
+  // Auto-advance when typing finishes
+  useEffect(() => {
+    if (autoMode && !isTyping && currentText.length > 0) {
+      const delay = Math.max(2000, currentText.length * 40);
+      autoTimerRef.current = setTimeout(() => {
+        advanceNarrator();
+      }, delay);
+      return () => {
+        if (autoTimerRef.current) clearTimeout(autoTimerRef.current);
+      };
+    }
+  }, [autoMode, isTyping, currentText, advanceNarrator]);
+
+  const handleTap = useCallback((e: React.MouseEvent) => {
+    // Don't trigger on controls area
+    const target = e.target as HTMLElement;
+    if (target.closest('.narrator-screen__controls')) return;
+
+    if (isTyping) {
+      setDisplayedChars(currentText.length);
+      setIsTyping(false);
+    } else {
+      advanceNarrator();
+    }
+  }, [isTyping, currentText.length, advanceNarrator]);
+
+  const progress = narratorTexts.length > 1
+    ? ((narratorIndex + 1) / narratorTexts.length) * 100
+    : displayedChars > 0 ? (displayedChars / currentText.length) * 100 : 0;
+
+  return (
+    <div className="narrator-screen" onClick={handleTap}>
+      <div className="narrator-screen__ambient" />
+
+      <div className="narrator-screen__progress">
+        <div className="narrator-screen__progress-bar" style={{ width: `${progress}%` }} />
+      </div>
+
+      <div className="narrator-screen__content">
+        <div className="narrator-screen__icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="23" />
+            <line x1="8" y1="23" x2="16" y2="23" />
+          </svg>
+        </div>
+
+        <div className="narrator-screen__text-container">
+          <p className="narrator-screen__text">
+            {currentText.split('').map((char, i) => (
+              <span
+                key={`${narratorIndex}-${i}`}
+                className={`narrator-char ${i < displayedChars ? 'narrator-char--visible' : ''}`}
+              >
+                {char}
+              </span>
+            ))}
+          </p>
+        </div>
+
+        <div className="narrator-screen__hint">
+          {autoMode
+            ? 'Авто-режим включён'
+            : isTyping
+              ? 'Нажмите, чтобы пропустить'
+              : isLastText
+                ? 'Нажмите, чтобы продолжить'
+                : 'Нажмите для следующей фразы'
+          }
+        </div>
+
+        {narratorTexts.length > 1 && (
+          <div className="narrator-screen__counter">
+            {narratorIndex + 1} / {narratorTexts.length}
+          </div>
+        )}
+      </div>
+
+      {/* Controls bar */}
+      <div className="narrator-screen__controls">
+        <button
+          className={`narrator-screen__auto-btn ${autoMode ? 'narrator-screen__auto-btn--active' : ''}`}
+          onClick={(e) => { e.stopPropagation(); setAutoMode(!autoMode); }}
+          title="Авто-режим"
+        >
+          <span>АВТО</span>
+        </button>
+
+        <div className="narrator-screen__volume-group">
+          <button
+            className="narrator-screen__mute-btn"
+            onClick={(e) => { e.stopPropagation(); setMuted(!muted); }}
+            title={muted ? 'Включить звук' : 'Выключить звук'}
+          >
+            {muted || volume === 0 ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <line x1="23" y1="9" x2="17" y2="15" />
+                <line x1="17" y1="9" x2="23" y2="15" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+              </svg>
+            )}
+          </button>
+          <input
+            type="range"
+            className="narrator-screen__volume-slider"
+            min="0"
+            max="100"
+            value={muted ? 0 : volume}
+            onChange={(e) => {
+              e.stopPropagation();
+              const v = Number(e.target.value);
+              setVolume(v);
+              if (v > 0) setMuted(false);
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}

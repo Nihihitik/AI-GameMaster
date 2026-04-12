@@ -81,7 +81,8 @@ export default function LobbyPage() {
     setSettings({ role_config: newConfig });
   };
 
-  const canStart = players.length >= MIN_PLAYERS;
+  const rolesExceedPlayers = specialCount > players.length;
+  const canStart = players.length >= MIN_PLAYERS && !rolesExceedPlayers;
 
   return (
     <div className="lobby-page">
@@ -150,7 +151,12 @@ export default function LobbyPage() {
         {isHost && (
           <div className="lobby-start">
             <Button onClick={handleStartGame} disabled={!canStart}>
-              {canStart ? 'Начать игру' : `Минимум ${MIN_PLAYERS} игроков (сейчас ${players.length})`}
+              {rolesExceedPlayers
+                ? `Ролей (${specialCount}) больше, чем игроков (${players.length})!`
+                : canStart
+                  ? 'Начать игру'
+                  : `Минимум ${MIN_PLAYERS} игроков (сейчас ${players.length})`
+              }
             </Button>
           </div>
         )}

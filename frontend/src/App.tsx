@@ -4,7 +4,8 @@ import AuthPage from './pages/AuthPage';
 import HomePage from './pages/HomePage';
 import LobbyPage from './pages/LobbyPage';
 import StorySelectionPage from './pages/StorySelectionPage';
-import RoleRevealPage from './pages/RoleRevealPage';
+import GamePage from './pages/GamePage';
+import ProfilePage from './pages/ProfilePage';
 import { useAuthStore } from './stores/authStore';
 import './App.scss';
 
@@ -24,9 +25,10 @@ function App() {
       <Routes>
         <Route path="/auth" element={<AuthPage />} />
         <Route path="/" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
+        <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
         <Route path="/sessions/:code" element={<ProtectedRoute><LobbyPage /></ProtectedRoute>} />
         <Route path="/sessions/:code/stories" element={<ProtectedRoute><StorySelectionPage /></ProtectedRoute>} />
-        <Route path="/game/:sessionId" element={<ProtectedRoute><RoleRevealPage /></ProtectedRoute>} />
+        <Route path="/game/:sessionId" element={<ProtectedRoute><GamePage /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

@@ -65,7 +65,7 @@ export default function HomePage() {
           <img src="/img/logo.png" alt="Logo" className="home-header__logo" />
           <span className="home-header__title">MafiaMaster</span>
         </div>
-        <button className="home-header__profile" aria-label="Профиль">
+        <button className="home-header__profile" aria-label="Профиль" onClick={() => navigate('/profile')}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
             <circle cx="12" cy="8" r="4" />
             <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
@@ -80,6 +80,13 @@ export default function HomePage() {
             alt="MafiaMaster"
             className="home-hero__image"
           />
+        </div>
+
+        <div className="home-tagline">
+          <h2 className="home-tagline__title">Город засыпает. Мафия просыпается.</h2>
+          <p className="home-tagline__subtitle">
+            Создайте сессию и пригласите друзей для захватывающей партии в Мафию с AI-ведущим
+          </p>
         </div>
 
         <div className="home-actions">
