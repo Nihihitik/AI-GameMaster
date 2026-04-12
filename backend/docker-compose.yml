@@ -38,6 +38,33 @@ services:
       db:
         condition: service_healthy
 
+  # Сервис frontend-приложения (Create React App dev-server)
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # REACT_APP_* читаются из окружения при старте CRA dev-server.
+      # Браузер ходит с хоста, поэтому используем localhost, а не docker-hostname.
+      REACT_APP_API_BASE_URL: http://localhost:8000
+      REACT_APP_WS_BASE_URL: ws://localhost:8000
+      REACT_APP_USE_MOCKS: "false"
+      # Polling watcher — hot reload изнутри контейнера с bind-mount.
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "3000:3000"
+    # Bind-mount для горячей перезагрузки; анонимный volume на node_modules,
+    # чтобы установленные в образе зависимости не затирались хостовыми.
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    stdin_open: true
+    tty: true
+
 # Именованный том для хранения данных PostgreSQL
 volumes:
   postgres_data:
