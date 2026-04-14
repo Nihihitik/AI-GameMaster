@@ -305,7 +305,7 @@ export default function HomePage() {
 
           <div className="create-modal__section">
             <h4 className="create-modal__section-title">Роли</h4>
-            <Stepper label="Мафия" value={createSettings.role_config.mafia} min={0} max={2}
+            <Stepper label="Мафия" value={createSettings.role_config.mafia} min={1} max={2}
               onChange={(v) => updateRoleConfig('mafia', v)} />
             <Stepper label="Дон Мафии" value={createSettings.role_config.don} min={0} max={1}
               onChange={(v) => updateRoleConfig('don', v)} />
@@ -322,6 +322,7 @@ export default function HomePage() {
               <span className="create-modal__civilians-label">Мирные жители</span>
               <span className="create-modal__civilians-count">{civiliansCount}</span>
             </div>
+            <div className="create-modal__hint">В партии должна быть минимум 1 мафия.</div>
           </div>
 
           {createError && <div className="create-modal__error">{createError}</div>}

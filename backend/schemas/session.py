@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class RoleConfig(BaseModel):
-    mafia: int = Field(ge=1)
+    mafia: int = Field(ge=0)
     sheriff: int = Field(default=0, ge=0, le=1)
     doctor: int = Field(default=0, ge=0, le=1)
     don: int = Field(default=0, ge=0, le=1)
@@ -89,4 +89,3 @@ class UpdateSettingsRequest(BaseModel):
     voting_timer_seconds: int | None = Field(default=None, ge=15, le=120)
     night_action_timer_seconds: int | None = Field(default=None, ge=15, le=60)
     role_config: RoleConfig | None = None
-

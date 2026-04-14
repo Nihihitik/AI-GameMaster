@@ -4,6 +4,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 
 @dataclass
@@ -44,11 +45,24 @@ class SessionRuntime:
     # background task marker (чтобы не запускать несколько recovery/sequence параллельно)
     night_sequence_running: bool = False
 
+    # Переход между фазами / резолв фаз выполняется прямо сейчас.
+    # Recovery не должен вмешиваться, пока этот флаг поднят.
+    phase_transition_running: bool = False
+    phase_transition_depth: int = 0
+
     # пауза: таймеры остановлены, ночная последовательность ждёт снятия паузы
     game_paused: bool = False
 
     # прервать ночную последовательность (кик / срочный выход из ожидания хода)
     night_sequence_abort: bool = False
+
+    # Текущий блокирующий шаг ведущего для reconnect-safe /state.
+    current_announcement: dict[str, Any] | None = None
+    announcement_started_at: datetime | None = None
+
+    # Раунд дневного голосования и список кандидатов для переголосования.
+    vote_round: int = 1
+    voting_candidate_ids: list[uuid.UUID] | None = None
 
 
 class RuntimeState:
@@ -63,4 +77,3 @@ class RuntimeState:
 
 
 runtime_state = RuntimeState()
-

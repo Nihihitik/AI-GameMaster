@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import random
 import uuid
 from datetime import datetime, timezone
@@ -28,6 +27,19 @@ from models.day_vote import DayVote
 from models.player import Player
 from models.role import Role
 from models.session import Session
+from services.narration_script import (
+    all_acknowledged_steps,
+    day_discussion_steps,
+    day_voting_steps,
+    game_finished_steps,
+    game_started_steps,
+    night_result_steps,
+    night_start_steps,
+    turn_intro_steps,
+    turn_outro_steps,
+    vote_result_steps,
+    vote_tie_steps,
+)
 from services.timer_service import timer_service
 from services.runtime_state import runtime_state
 from services.ws_manager import ws_manager
@@ -37,15 +49,89 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _announcement(trigger: str, seed_salt: str = "") -> dict:
-    """Триггер для локальной озвучки на клиенте.
+def _role_config(session: Session) -> dict:
+    return (session.settings or {}).get("role_config") or {}
 
-    Клиент по trigger + seed выбирает одну из заранее заготовленных фраз.
-    seed is deterministic (same for all clients) so everyone hears the same text.
-    """
-    raw = f"{trigger}:{seed_salt}:{_now().isoformat()}"
-    seed = int(hashlib.md5(raw.encode()).hexdigest()[:8], 16)
-    return {"trigger": trigger, "seed": seed}
+
+def _begin_phase_transition(session_id: uuid.UUID) -> None:
+    rt = runtime_state.get(session_id)
+    rt.phase_transition_depth += 1
+    rt.phase_transition_running = True
+
+
+def _end_phase_transition(session_id: uuid.UUID) -> None:
+    rt = runtime_state.get(session_id)
+    rt.phase_transition_depth = max(0, rt.phase_transition_depth - 1)
+    if rt.phase_transition_depth == 0:
+        rt.phase_transition_running = False
+
+
+def _is_turn_enabled(session: Session, turn_slug: str) -> bool:
+    cfg = _role_config(session)
+    mapping = {
+        "lover": int(cfg.get("lover", 0)) > 0,
+        "mafia": int(cfg.get("mafia", 0)) > 0,
+        "don": int(cfg.get("don", 0)) > 0,
+        "sheriff": int(cfg.get("sheriff", 0)) > 0,
+        "maniac": int(cfg.get("maniac", 0)) > 0,
+        "doctor": int(cfg.get("doctor", 0)) > 0,
+    }
+    return mapping.get(turn_slug, False)
+
+
+async def _wait_or_pause(session_id: uuid.UUID, seconds: float) -> None:
+    rt = runtime_state.get(session_id)
+    deadline = asyncio.get_running_loop().time() + seconds
+    while True:
+        if rt.game_paused:
+            await asyncio.sleep(0.2)
+            continue
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(0.2, remaining))
+
+
+async def _set_runtime_announcement(session_id: uuid.UUID, announcement: dict | None) -> None:
+    rt = runtime_state.get(session_id)
+    rt.current_announcement = announcement
+    rt.announcement_started_at = _now() if announcement else None
+
+
+async def _emit_phase_changed(
+    session_id: uuid.UUID,
+    payload: dict,
+    *,
+    db: AsyncSession | None = None,
+    phase_id: uuid.UUID | None = None,
+    persist: bool = False,
+) -> None:
+    announcement = payload.get("announcement")
+    await _set_runtime_announcement(session_id, announcement if announcement and announcement.get("blocking", True) else None)
+    if persist and db is not None and phase_id is not None:
+        await _persist_phase_changed(db, session_id, phase_id, payload)
+    await ws_manager.send_to_session(session_id, {"type": "phase_changed", "payload": payload})
+
+
+async def _play_phase_announcements(
+    session_id: uuid.UUID,
+    phase_payload: dict,
+    steps: list[dict],
+    *,
+    db: AsyncSession | None = None,
+    phase_id: uuid.UUID | None = None,
+    persist: bool = False,
+) -> None:
+    for announcement in steps:
+        await _emit_phase_changed(
+            session_id,
+            {**phase_payload, "announcement": announcement},
+            db=db,
+            phase_id=phase_id,
+            persist=persist and db is not None and phase_id is not None,
+        )
+        await _wait_or_pause(session_id, (announcement.get("duration_ms") or 0) / 1000)
+    await _set_runtime_announcement(session_id, None)
 
 
 async def _persist_phase_changed(
@@ -292,128 +378,116 @@ async def transition_to_night(session_id: uuid.UUID, phase_number: int):
     rt = runtime_state.get(session_id)
     if rt.game_paused:
         return
+    _begin_phase_transition(session_id)
 
-    async with async_session_factory() as db:
-        session = await db.get(Session, session_id)
-        if not session or session.status != "active":
-            return
-        dup_night = await db.scalar(
-            select(GamePhase.id).where(
-                GamePhase.session_id == session_id,
-                GamePhase.phase_number == phase_number,
-                GamePhase.phase_type == "night",
+    try:
+        async with async_session_factory() as db:
+            session = await db.get(Session, session_id)
+            if not session or session.status != "active":
+                return
+            dup_night = await db.scalar(
+                select(GamePhase.id).where(
+                    GamePhase.session_id == session_id,
+                    GamePhase.phase_number == phase_number,
+                    GamePhase.phase_type == "night",
+                )
             )
-        )
-        if dup_night is not None:
-            return
-        current = await get_current_phase(db, session_id)
-        if current and current.ended_at is None:
-            current.ended_at = _now()
+            if dup_night is not None:
+                return
+            current = await get_current_phase(db, session_id)
 
-        # Свежий вход в ночь: сбрасываем блокировки и фиксируем
-        # цели мафии/маньяка для новой ночи.
-        rt = runtime_state.get(session_id)
-        rt.blocked_tonight = set()
-        rt.day_blocked_player = None
-        rt.mafia_choice_target = None
-        rt.mafia_choice_by = None
-        rt.maniac_choice_target = None
+            # Свежий вход в ночь: сбрасываем блокировки и фиксируем
+            # цели мафии/маньяка для новой ночи.
+            rt = runtime_state.get(session_id)
+            rt.blocked_tonight = set()
+            rt.day_blocked_player = None
+            rt.mafia_choice_target = None
+            rt.mafia_choice_by = None
+            rt.maniac_choice_target = None
 
-        # ── Pre-night narrator sequence ─────────────────────────────────
-        # Night 1: rules intro → "all acknowledged" → night start poem.
-        # Night 2+: only "night start" phrase.
-        if phase_number == 1:
-            # 1) Rules intro
-            rules_ann = _announcement("game_started", str(session_id))
-            await ws_manager.send_to_session(
-                session_id,
-                {
-                    "type": "phase_changed",
-                    "payload": {
+            phase_payload = {
+                "phase": {"type": "night", "number": phase_number},
+                "sub_phase": None,
+                "timer_seconds": None,
+                "timer_started_at": None,
+            }
+
+            # Сначала создаём новую фазу и только потом закрываем старую, чтобы
+            # /state никогда не оставался без актуальной активной фазы.
+            phase = GamePhase(
+                id=uuid.uuid4(),
+                session_id=session_id,
+                phase_type="night",
+                phase_number=phase_number,
+                started_at=_now(),
+                ended_at=None,
+            )
+            db.add(phase)
+            if current and current.ended_at is None:
+                current.ended_at = phase.started_at
+            await db.commit()
+            try:
+                await _persist_phase_changed(
+                    db,
+                    session_id,
+                    phase.id,
+                    {
                         "phase": {"type": "night", "number": phase_number},
                         "sub_phase": None,
+                        "night_turn": None,
+                        "timer_name": None,
                         "timer_seconds": None,
                         "timer_started_at": None,
-                        "announcement": rules_ann,
+                        "blocked_tonight": [],
                     },
-                },
-            )
-            await asyncio.sleep(6)
-            if rt.game_paused:
+                )
+            except IntegrityError:
+                await db.rollback()
                 return
 
-            # 2) "All acknowledged / starting game"
-            ack_ann = _announcement("all_acknowledged", str(session_id))
-            await ws_manager.send_to_session(
-                session_id,
-                {
-                    "type": "phase_changed",
-                    "payload": {
-                        "phase": {"type": "night", "number": phase_number},
-                        "sub_phase": None,
-                        "timer_seconds": None,
-                        "timer_started_at": None,
-                        "announcement": ack_ann,
-                    },
-                },
-            )
-            await asyncio.sleep(5)
-            if rt.game_paused:
-                return
+            rt.night_sequence_running = True
+            try:
+                # ── Pre-night narrator sequence ─────────────────────────────────
+                if phase_number == 1:
+                    await _play_phase_announcements(
+                        session_id,
+                        phase_payload,
+                        game_started_steps(f"{session_id}:night:{phase_number}:game_started"),
+                        db=db,
+                        phase_id=phase.id,
+                        persist=True,
+                    )
+                    if rt.game_paused:
+                        return
+                    await _play_phase_announcements(
+                        session_id,
+                        phase_payload,
+                        all_acknowledged_steps(f"{session_id}:night:{phase_number}:all_acknowledged"),
+                        db=db,
+                        phase_id=phase.id,
+                        persist=True,
+                    )
+                    if rt.game_paused:
+                        return
 
-        # 3) Night start phrase
-        night_start_ann = _announcement("night_start", str(session_id))
-        await ws_manager.send_to_session(
-            session_id,
-            {
-                "type": "phase_changed",
-                "payload": {
-                    "phase": {"type": "night", "number": phase_number},
-                    "sub_phase": None,
-                    "timer_seconds": None,
-                    "timer_started_at": None,
-                    "announcement": night_start_ann,
-                },
-            },
-        )
-        await asyncio.sleep(5)
-        if rt.game_paused:
-            return
+                await _play_phase_announcements(
+                    session_id,
+                    phase_payload,
+                    night_start_steps(f"{session_id}:night:{phase_number}:start", phase_number),
+                    db=db,
+                    phase_id=phase.id,
+                    persist=True,
+                )
+                if rt.game_paused:
+                    return
 
-        # ── Create night phase in DB ──────────────────────────────────
-        phase = GamePhase(
-            id=uuid.uuid4(),
-            session_id=session_id,
-            phase_type="night",
-            phase_number=phase_number,
-            started_at=_now(),
-            ended_at=None,
-        )
-        db.add(phase)
-        try:
-            await _persist_phase_changed(
-                db,
-                session_id,
-                phase.id,
-                {
-                    "phase": {"type": "night", "number": phase_number},
-                    "sub_phase": None,
-                    "night_turn": "lover",
-                    "timer_seconds": int((session.settings or {}).get("night_action_timer_seconds") or 30),
-                    "timer_started_at": _now().isoformat(),
-                    "announcement": night_start_ann,
-                    "blocked_tonight": [],
-                },
-            )
-        except IntegrityError:
-            await db.rollback()
-            return
-
-        # Запускаем последовательность ходов ночи:
-        # lover -> mafia -> don -> sheriff -> doctor -> maniac
-        paused = await execute_night_sequence(db, session, phase)
-        if paused == "paused":
-            return
+                paused = await execute_night_sequence(db, session, phase)
+                if paused == "paused":
+                    return
+            finally:
+                rt.night_sequence_running = False
+    finally:
+        _end_phase_transition(session_id)
 
 
 async def execute_night_sequence(
@@ -424,16 +498,13 @@ async def execute_night_sequence(
 ) -> str | None:
     """Ночная очередь. Возвращает \"paused\", если игра поставлена на паузу (resolve_night не вызывается).
 
-    Очередь: lover -> mafia -> don -> sheriff -> doctor -> maniac.
-    Роли, которых нет в игре или актёры мертвы, — пропускаются.
-    Игроки, заблокированные любовницей, тоже пропускаются (ход выдаётся, действие — no-op).
+    Очередь: lover -> mafia -> don -> sheriff -> maniac -> doctor.
+    Роли с 0 в role_config пропускаются полностью.
+    Если роль выбрана в сессии, но актёр мёртв/заблокирован — проигрывается пустой ход с тем же таймером.
     """
     settings = session.settings or {}
     turn_seconds = int(settings.get("night_action_timer_seconds") or 30)
     rt = runtime_state.get(session.id)
-
-    # При recovery мы не трогаем runtime — его уже восстановили из game_events
-    # перед вызовом. При свежем входе в ночь runtime сброшен в `transition_to_night`.
 
     players = (
         await db.scalars(
@@ -454,11 +525,109 @@ async def execute_night_sequence(
         r = role_by_id.get(p.role_id)
         return r.slug if r else None
 
-    async def _run_turn(turn_slug: str, seconds_for_turn: int) -> str | None:
+    async def _doctor_context(actor: Player) -> tuple[list[dict], dict | None]:
+        prev_phase = await db.scalar(
+            select(GamePhase).where(
+                GamePhase.session_id == session.id,
+                GamePhase.phase_type == "night",
+                GamePhase.phase_number == phase.phase_number - 1,
+            ).limit(1)
+        )
+        prev_heal_target_id: uuid.UUID | None = None
+        if prev_phase is not None:
+            prev_heal_target_id = await db.scalar(
+                select(NightAction.target_player_id).where(
+                    NightAction.phase_id == prev_phase.id,
+                    NightAction.actor_player_id == actor.id,
+                    NightAction.action_type == "heal",
+                )
+            )
+        heal_restriction = None
+        if prev_heal_target_id is not None:
+            restricted_p = next((p for p in alive if p.id == prev_heal_target_id), None)
+            if restricted_p:
+                heal_restriction = {
+                    "player_id": str(restricted_p.id),
+                    "name": restricted_p.name,
+                    "reason": "Нельзя лечить одного и того же два раунда подряд",
+                }
+        available_targets = [
+            {"player_id": str(p.id), "name": p.name}
+            for p in alive
+            if p.id != prev_heal_target_id
+        ]
+        return available_targets, heal_restriction
+
+    async def _action_payload_for(turn_slug: str, actor: Player | None) -> tuple[dict | None, str | None]:
+        if actor is None:
+            return None, None
+        if turn_slug == "lover":
+            return {
+                "action_type": "lover_visit",
+                "available_targets": [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in alive
+                    if p.id != actor.id and p.id != rt.lover_last_target
+                ],
+            }, "lover_visit"
+        if turn_slug == "don":
+            def _not_mafia_target(pl: Player) -> bool:
+                if pl.id == actor.id:
+                    return False
+                if not pl.role_id:
+                    return True
+                r = role_by_id.get(pl.role_id)
+                return r is None or r.team != "mafia"
+
+            return {
+                "action_type": "don_check",
+                "available_targets": [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in alive
+                    if _not_mafia_target(p)
+                ],
+            }, "don_check"
+        if turn_slug == "sheriff":
+            return {
+                "action_type": "check",
+                "available_targets": [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in alive
+                    if p.id != actor.id
+                ],
+            }, "check"
+        if turn_slug == "doctor":
+            targets, heal_restriction = await _doctor_context(actor)
+            payload = {
+                "action_type": "heal",
+                "available_targets": targets,
+            }
+            if heal_restriction:
+                payload["heal_restriction"] = heal_restriction
+            return payload, "heal"
+        if turn_slug == "maniac":
+            return {
+                "action_type": "maniac_kill",
+                "available_targets": [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in alive
+                    if p.id != actor.id
+                ],
+            }, "maniac_kill"
+        return None, None
+
+    async def _run_turn(turn_slug: str, seconds_for_turn: int, *, resume_timer_only: bool = False) -> str | None:
         """Возвращает \"paused\" | \"aborted\" или None если ход завершён штатно."""
 
-        # ── 1. Pre-check: does this role have living actors? ──────────
-        #    If not, skip entirely (no broadcast, no timer).
+        if not _is_turn_enabled(session, turn_slug):
+            return None
+
+        mafia_actors: list[Player] = []
+        actor: Player | None = None
+        action_available = False
+        action_type: str | None = None
+        action_payload: dict | None = None
+
         if turn_slug == "mafia":
             already_kill = await db.scalar(
                 select(NightAction.id).where(
@@ -468,84 +637,69 @@ async def execute_night_sequence(
             )
             if already_kill is not None:
                 return None
-            mafia_actors = [
-                p for p in alive
-                if role_slug(p) == "mafia" and p.id not in rt.blocked_tonight
-            ]
-            if not mafia_actors:
-                return None
+
+            mafia_actors = [p for p in alive if role_slug(p) == "mafia"]
+            action_available = len([p for p in mafia_actors if p.id not in rt.blocked_tonight]) > 0
+            action_type = "kill"
         else:
             solo_actors = [p for p in alive if role_slug(p) == turn_slug]
-            if not solo_actors:
-                return None
-            solo_actor = solo_actors[0]
-            # Если актёр заблокирован любовницей — пропускаем ход (no-op).
-            if solo_actor.id in rt.blocked_tonight:
-                await ws_manager.send_to_user(
-                    session.id,
-                    solo_actor.user_id,
-                    {
-                        "type": "action_blocked",
-                        "payload": {
-                            "action_type": (
-                                (role_by_id.get(solo_actor.role_id).abilities or {}).get("night_action")
-                                if solo_actor.role_id else None
-                            ),
-                            "reason": "lover_block",
-                        },
-                    },
+            actor = solo_actors[0] if solo_actors else None
+            if actor is not None:
+                already = await db.scalar(
+                    select(NightAction.id).where(
+                        NightAction.phase_id == phase.id,
+                        NightAction.actor_player_id == actor.id,
+                    )
                 )
-                return None
-            already = await db.scalar(
-                select(NightAction.id).where(
-                    NightAction.phase_id == phase.id,
-                    NightAction.actor_player_id == solo_actor.id,
-                )
-            )
-            if already is not None:
-                return None
+                if already is not None:
+                    return None
+                action_available = actor.id not in rt.blocked_tonight
+                action_payload, action_type = await _action_payload_for(turn_slug, actor)
 
-        # ── 2. Actors exist → set runtime & persist ──────────────────
+        has_don = _is_turn_enabled(session, "don")
+        if not resume_timer_only:
+            await _play_phase_announcements(
+                session.id,
+                {
+                    "phase": {"type": "night", "number": phase.phase_number},
+                    "sub_phase": None,
+                    "night_turn": turn_slug,
+                    "timer_name": None,
+                    "timer_seconds": None,
+                    "timer_started_at": None,
+                },
+                turn_intro_steps(turn_slug, f"{session.id}:night:{phase.phase_number}:{turn_slug}:intro", has_don=has_don),
+                db=db,
+                phase_id=phase.id,
+                persist=True,
+            )
+            if rt.game_paused:
+                return "paused"
+
         rt.night_turn = turn_slug
         rt.timer_name = f"night_{turn_slug}"
         rt.timer_seconds = seconds_for_turn
         rt.timer_started_at = _now()
         rt.night_action_event.clear()
 
-        turn_announcement = _announcement(f"{turn_slug}_turn", str(session.id))
-        await _persist_phase_changed(
-            db,
+        phase_payload = {
+            "phase": {"type": "night", "number": phase.phase_number},
+            "sub_phase": None,
+            "night_turn": turn_slug,
+            "timer_name": rt.timer_name,
+            "timer_seconds": seconds_for_turn,
+            "timer_started_at": rt.timer_started_at.isoformat(),
+            "blocked_tonight": [str(x) for x in rt.blocked_tonight],
+        }
+        await _emit_phase_changed(
             session.id,
-            phase.id,
-            {
-                "phase": {"type": "night", "number": phase.phase_number},
-                "sub_phase": None,
-                "night_turn": turn_slug,
-                "timer_seconds": seconds_for_turn,
-                "timer_started_at": rt.timer_started_at.isoformat(),
-                "announcement": turn_announcement,
-                "blocked_tonight": [str(x) for x in rt.blocked_tonight],
-            },
+            phase_payload,
+            db=db,
+            phase_id=phase.id,
+            persist=True,
         )
 
-        # ── 3. Broadcast turn announcement to ALL players ─────────────
-        await ws_manager.send_to_session(
-            session.id,
-            {
-                "type": "phase_changed",
-                "payload": {
-                    "phase": {"type": "night", "number": phase.phase_number},
-                    "sub_phase": None,
-                    "night_turn": turn_slug,
-                    "timer_seconds": seconds_for_turn,
-                    "timer_started_at": rt.timer_started_at.isoformat(),
-                    "announcement": turn_announcement,
-                },
-            },
-        )
-
-        # ── 4. Send action_required to the specific actor(s) ─────────
-        if turn_slug == "mafia":
+        if turn_slug == "mafia" and action_available:
             def _is_non_mafia(pl: Player) -> bool:
                 if not pl.role_id:
                     return True
@@ -557,10 +711,17 @@ async def execute_night_sequence(
                 for p in alive
                 if _is_non_mafia(p)
             ]
-            for a in mafia_actors:
+            for mafia_actor in mafia_actors:
+                if mafia_actor.id in rt.blocked_tonight:
+                    await ws_manager.send_to_user(
+                        session.id,
+                        mafia_actor.user_id,
+                        {"type": "action_blocked", "payload": {"action_type": "kill", "reason": "lover_block"}},
+                    )
+                    continue
                 await ws_manager.send_to_user(
                     session.id,
-                    a.user_id,
+                    mafia_actor.user_id,
                     {
                         "type": "action_required",
                         "payload": {
@@ -571,90 +732,22 @@ async def execute_night_sequence(
                         },
                     },
                 )
-        else:
-            actor = solo_actor
-
-            if turn_slug == "lover":
-                action_type = "lover_visit"
-                available_targets = [
-                    {"player_id": str(p.id), "name": p.name}
-                    for p in alive
-                    if p.id != actor.id and p.id != rt.lover_last_target
-                ]
-            elif turn_slug == "don":
-                action_type = "don_check"
-
-                def _not_mafia_target(pl: Player) -> bool:
-                    if pl.id == actor.id:
-                        return False
-                    if not pl.role_id:
-                        return True
-                    r = role_by_id.get(pl.role_id)
-                    return r is None or r.team != "mafia"
-
-                available_targets = [
-                    {"player_id": str(p.id), "name": p.name}
-                    for p in alive
-                    if _not_mafia_target(p)
-                ]
-            elif turn_slug == "sheriff":
-                action_type = "check"
-                available_targets = [
-                    {"player_id": str(p.id), "name": p.name}
-                    for p in alive
-                    if p.id != actor.id
-                ]
-            elif turn_slug == "doctor":
-                action_type = "heal"
-                prev_phase = await db.scalar(
-                    select(GamePhase).where(
-                        GamePhase.session_id == session.id,
-                        GamePhase.phase_type == "night",
-                        GamePhase.phase_number == phase.phase_number - 1,
-                    ).limit(1)
-                )
-                prev_heal_target_id: uuid.UUID | None = None
-                if prev_phase is not None:
-                    prev_heal_target_id = await db.scalar(
-                        select(NightAction.target_player_id).where(
-                            NightAction.phase_id == prev_phase.id,
-                            NightAction.actor_player_id == actor.id,
-                            NightAction.action_type == "heal",
-                        )
-                    )
-                heal_restriction = None
-                if prev_heal_target_id is not None:
-                    restricted_p = next((p for p in alive if p.id == prev_heal_target_id), None)
-                    if restricted_p:
-                        heal_restriction = {"player_id": str(restricted_p.id), "name": restricted_p.name,
-                                            "reason": "Нельзя лечить одного и того же два раунда подряд"}
-                available_targets = [
-                    {"player_id": str(p.id), "name": p.name}
-                    for p in alive
-                    if p.id != prev_heal_target_id
-                ]
-            elif turn_slug == "maniac":
-                action_type = "maniac_kill"
-                available_targets = [
-                    {"player_id": str(p.id), "name": p.name}
-                    for p in alive
-                    if p.id != actor.id
-                ]
-            else:
-                return None
-
-            action_payload: dict = {
-                "action_type": action_type,
-                "available_targets": available_targets,
+        elif actor is not None and action_payload and action_available:
+            action_payload = {
+                **action_payload,
                 "timer_seconds": seconds_for_turn,
                 "timer_started_at": rt.timer_started_at.isoformat(),
             }
-            if turn_slug == "doctor" and heal_restriction:
-                action_payload["heal_restriction"] = heal_restriction
             await ws_manager.send_to_user(
                 session.id,
                 actor.user_id,
                 {"type": "action_required", "payload": action_payload},
+            )
+        elif actor is not None and action_type and not action_available:
+            await ws_manager.send_to_user(
+                session.id,
+                actor.user_id,
+                {"type": "action_blocked", "payload": {"action_type": action_type, "reason": "lover_block"}},
             )
 
         async def _timeout():
@@ -672,34 +765,32 @@ async def execute_night_sequence(
         if rt.game_paused:
             return "paused"
 
-        # ── 5. Post-action: give time for check results, then closing phrase ──
-        # Brief pause so sheriff/don can see their check result before screen changes.
-        await asyncio.sleep(5)
-        if rt.game_paused:
-            return "paused"
+        if action_available and turn_slug in {"sheriff", "don"}:
+            await _wait_or_pause(session.id, 5)
+            if rt.game_paused:
+                return "paused"
 
-        # Broadcast closing announcement to ALL players.
-        closing = _announcement(f"{turn_slug}_turn_end", str(session.id))
-        await ws_manager.send_to_session(
+        await _play_phase_announcements(
             session.id,
             {
-                "type": "phase_changed",
-                "payload": {
-                    "phase": {"type": "night", "number": phase.phase_number},
-                    "sub_phase": None,
-                    "night_turn": turn_slug,
-                    "announcement": closing,
-                },
+                "phase": {"type": "night", "number": phase.phase_number},
+                "sub_phase": None,
+                "night_turn": turn_slug,
+                "timer_name": None,
+                "timer_seconds": None,
+                "timer_started_at": None,
             },
+            turn_outro_steps(f"{turn_slug}", f"{session.id}:night:{phase.phase_number}:{turn_slug}:outro", has_don=has_don),
+            db=db,
+            phase_id=phase.id,
+            persist=True,
         )
-        # Wait for clients to display the closing narrator before next turn.
-        await asyncio.sleep(4)
         if rt.game_paused:
             return "paused"
 
         return None
 
-    order = ["lover", "mafia", "don", "sheriff", "doctor", "maniac"]
+    order = ["lover", "mafia", "don", "sheriff", "maniac", "doctor"]
     start_idx = 0
     first_seconds: int | None = None
     if resume_from:
@@ -715,7 +806,7 @@ async def execute_night_sequence(
         if rt.game_paused:
             return "paused"
         sec = first_seconds if (first_seconds is not None and i == start_idx) else turn_seconds
-        res = await _run_turn(turn_slug, sec)
+        res = await _run_turn(turn_slug, sec, resume_timer_only=bool(first_seconds is not None and i == start_idx))
         if res == "paused":
             return "paused"
         if res == "aborted":
@@ -749,57 +840,100 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
     случай перепроверяем флаг was_blocked.
     """
     rt = runtime_state.get(session.id)
+    _begin_phase_transition(session.id)
+    try:
 
-    mafia_action = await db.scalar(
+        mafia_action = await db.scalar(
         select(NightAction).where(NightAction.phase_id == phase.id, NightAction.action_type == "kill")
-    )
-    maniac_action = await db.scalar(
+        )
+        maniac_action = await db.scalar(
         select(NightAction).where(NightAction.phase_id == phase.id, NightAction.action_type == "maniac_kill")
-    )
-    doctor_action = await db.scalar(
+        )
+        doctor_action = await db.scalar(
         select(NightAction).where(NightAction.phase_id == phase.id, NightAction.action_type == "heal")
-    )
-    lover_action = await db.scalar(
+        )
+        lover_action = await db.scalar(
         select(NightAction).where(NightAction.phase_id == phase.id, NightAction.action_type == "lover_visit")
-    )
+        )
 
     # Соберём цели атак (учитываем только атаки от незаблокированных игроков).
-    attack_target_ids: set[uuid.UUID] = set()
-    if mafia_action and not mafia_action.was_blocked:
-        attack_target_ids.add(mafia_action.target_player_id)
-    if maniac_action and not maniac_action.was_blocked:
-        attack_target_ids.add(maniac_action.target_player_id)
+        attack_target_ids: set[uuid.UUID] = set()
+        if mafia_action and not mafia_action.was_blocked:
+            attack_target_ids.add(mafia_action.target_player_id)
+        if maniac_action and not maniac_action.was_blocked:
+            attack_target_ids.add(maniac_action.target_player_id)
 
-    healed_id: uuid.UUID | None = doctor_action.target_player_id if doctor_action else None
+        healed_id: uuid.UUID | None = doctor_action.target_player_id if doctor_action else None
+        saved_player: Player | None = await db.get(Player, healed_id) if healed_id else None
 
-    died_players: list[Player] = []
-    for tid in attack_target_ids:
-        if healed_id is not None and tid == healed_id:
-            # Помечаем все атаки на эту цель как заблокированные (доктором).
-            if mafia_action and mafia_action.target_player_id == tid:
+        lover_actor_id = lover_action.actor_player_id if lover_action else None
+        lover_target_id = lover_action.target_player_id if lover_action else None
+
+    # Если любовница увела игрока на ночь, прямое нападение по этой цели промахивается.
+        if lover_target_id is not None and lover_target_id in attack_target_ids:
+            attack_target_ids.discard(lover_target_id)
+            if mafia_action and mafia_action.target_player_id == lover_target_id:
                 mafia_action.was_blocked = True
-            if maniac_action and maniac_action.target_player_id == tid:
+            if maniac_action and maniac_action.target_player_id == lover_target_id:
                 maniac_action.was_blocked = True
-            continue
-        target_player = await db.get(Player, tid)
-        if target_player and target_player.status == "alive":
-            target_player.status = "dead"
-            died_players.append(target_player)
+
+        direct_death_ids = set(attack_target_ids)
+        if healed_id is not None and healed_id in direct_death_ids:
+            if mafia_action and mafia_action.target_player_id == healed_id:
+                mafia_action.was_blocked = True
+            if maniac_action and maniac_action.target_player_id == healed_id:
+                maniac_action.was_blocked = True
+            direct_death_ids.discard(healed_id)
+
+        collateral_death_ids: set[uuid.UUID] = set()
+        if lover_actor_id is not None and lover_target_id is not None and lover_actor_id in direct_death_ids:
+            collateral_death_ids.add(lover_target_id)
+        if healed_id is not None and healed_id in collateral_death_ids:
+            collateral_death_ids.discard(healed_id)
+
+        final_death_ids = direct_death_ids | collateral_death_ids
+
+        died_players: list[Player] = []
+        for tid in final_death_ids:
+            target_player = await db.get(Player, tid)
+            if target_player and target_player.status == "alive":
+                target_player.status = "dead"
+                died_players.append(target_player)
 
     # Обновим "последняя цель лавера" и "заблокированный на день игрок".
-    if lover_action:
-        rt.lover_last_target = lover_action.target_player_id
-        # Цель лавера не сможет голосовать утром. Если лавер выбрал цель, которая
-        # только что погибла, — всё равно сохраняем (мёртвый не голосует, но это безопасно).
-        rt.day_blocked_player = lover_action.target_player_id
-    else:
-        rt.day_blocked_player = None
+        if lover_action:
+            rt.lover_last_target = lover_action.target_player_id
+            rt.day_blocked_player = lover_action.target_player_id
+        else:
+            rt.day_blocked_player = None
 
-    died_payload = [
-        {"player_id": str(p.id), "name": p.name} for p in died_players
-    ]
-    payload = {"died": died_payload if died_payload else None}
-    db.add(
+        blocked_player = await db.get(Player, rt.day_blocked_player) if rt.day_blocked_player else None
+        died_payload = [
+            {"player_id": str(p.id), "name": p.name} for p in died_players
+        ]
+        payload = {
+        "died": died_payload if died_payload else None,
+        "saved_player": (
+            {"player_id": str(saved_player.id), "name": saved_player.name}
+            if saved_player and healed_id is not None and healed_id not in final_death_ids
+            else None
+        ),
+        "day_blocked_player": str(rt.day_blocked_player) if rt.day_blocked_player else None,
+        "night_outcome": {
+            "phase_number": phase.phase_number,
+            "died_count": len(died_players),
+            "saved": bool(saved_player and healed_id is not None and healed_id not in final_death_ids),
+            "blocked_player_name": blocked_player.name if blocked_player else None,
+        },
+        }
+        morning_steps = night_result_steps(
+        f"{session.id}:night_result:{phase.phase_number}",
+        phase_number=phase.phase_number,
+        died_names=[p.name for p in died_players],
+        saved_name=(saved_player.name if saved_player and healed_id is not None and healed_id not in final_death_ids else None),
+        blocked_name=(blocked_player.name if blocked_player else None),
+        )
+        db.add(
         GameEvent(
             id=uuid.uuid4(),
             session_id=session.id,
@@ -807,14 +941,15 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
             event_type="night_result",
             payload={
                 **payload,
+                "announcement": morning_steps[0] if morning_steps else None,
                 # Для восстановления runtime_state после рестарта.
                 "lover_last_target": str(rt.lover_last_target) if rt.lover_last_target else None,
                 "day_blocked_player": str(rt.day_blocked_player) if rt.day_blocked_player else None,
             },
         )
-    )
-    for dp in died_players:
-        db.add(
+        )
+        for dp in died_players:
+            db.add(
             GameEvent(
                 id=uuid.uuid4(),
                 session_id=session.id,
@@ -823,14 +958,14 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
                 payload={"player_id": str(dp.id), "name": dp.name, "cause": "night"},
             )
         )
-    await db.commit()
+        await db.commit()
 
-    await ws_manager.send_to_session(
-        session.id,
-        {"type": "night_result", "payload": {**payload, "announcement": _announcement("night_result", str(session.id))}},
-    )
-    for dp in died_players:
         await ws_manager.send_to_session(
+        session.id,
+        {"type": "night_result", "payload": {**payload, "announcement": morning_steps[0] if morning_steps else None}},
+        )
+        for dp in died_players:
+            await ws_manager.send_to_session(
             session.id,
             {
                 "type": "player_eliminated",
@@ -838,13 +973,27 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
             },
         )
 
-    winner = await check_win_condition(db, session.id)
-    if winner:
-        await finish_game(db, session, winner)
-        return
+        if len(morning_steps) > 1:
+            for announcement in morning_steps[1:]:
+                await ws_manager.send_to_session(
+                session.id,
+                {"type": "night_result", "payload": {**payload, "announcement": announcement}},
+            )
+                await _wait_or_pause(session.id, (announcement.get("duration_ms") or 0) / 1000)
+                if rt.game_paused:
+                    return
+        else:
+            await _wait_or_pause(session.id, ((morning_steps[0].get("duration_ms") or 0) / 1000) if morning_steps else 0)
 
-    # переход в день
-    await transition_to_day(session.id, phase.phase_number)
+        winner = await check_win_condition(db, session.id)
+        if winner:
+            await finish_game(db, session, winner, before_voting=True)
+            return
+
+        # переход в день
+        await transition_to_day(session.id, phase.phase_number)
+    finally:
+        _end_phase_transition(session.id)
 
 
 async def transition_to_day(session_id: uuid.UUID, phase_number: int):
@@ -853,157 +1002,213 @@ async def transition_to_day(session_id: uuid.UUID, phase_number: int):
     rt = runtime_state.get(session_id)
     if rt.game_paused:
         return
-
-    async with async_session_factory() as db:
-        session = await db.get(Session, session_id)
-        if not session or session.status != "active":
-            return
-        dup_day = await db.scalar(
-            select(GamePhase.id).where(
-                GamePhase.session_id == session_id,
-                GamePhase.phase_number == phase_number,
-                GamePhase.phase_type == "day",
+    _begin_phase_transition(session_id)
+    try:
+        async with async_session_factory() as db:
+            session = await db.get(Session, session_id)
+            if not session or session.status != "active":
+                return
+            dup_day = await db.scalar(
+                select(GamePhase.id).where(
+                    GamePhase.session_id == session_id,
+                    GamePhase.phase_number == phase_number,
+                    GamePhase.phase_type == "day",
+                )
             )
-        )
-        if dup_day is not None:
-            return
-        current = await get_current_phase(db, session_id)
-        if current and current.ended_at is None:
-            current.ended_at = _now()
+            if dup_day is not None:
+                return
+            current = await get_current_phase(db, session_id)
 
-        phase = GamePhase(
-            id=uuid.uuid4(),
-            session_id=session_id,
-            phase_type="day",
-            phase_number=phase_number,
-            started_at=_now(),
-            ended_at=None,
-        )
-        db.add(phase)
-        disc_ann = _announcement("day_discussion_start", str(session_id))
-        try:
-            await _persist_phase_changed(
-                db,
+            phase = GamePhase(
+                id=uuid.uuid4(),
+                session_id=session_id,
+                phase_type="day",
+                phase_number=phase_number,
+                started_at=_now(),
+                ended_at=None,
+            )
+            db.add(phase)
+            if current and current.ended_at is None:
+                current.ended_at = phase.started_at
+
+            await db.commit()
+
+            await _play_phase_announcements(
                 session_id,
-                phase.id,
                 {
                     "phase": {"type": "day", "number": phase_number},
                     "sub_phase": "discussion",
-                    "night_turn": None,
-                    "timer_seconds": int((session.settings or {}).get("discussion_timer_seconds") or 120),
-                    "timer_started_at": _now().isoformat(),
-                    "announcement": disc_ann,
+                    "timer_seconds": None,
+                    "timer_started_at": None,
                 },
+                day_discussion_steps(f"{session_id}:day:{phase_number}:discussion_intro"),
+                db=db,
+                phase_id=phase.id,
+                persist=True,
             )
-        except IntegrityError:
-            await db.rollback()
-            return
+            if rt.game_paused:
+                return
 
-        settings = session.settings or {}
-        discussion_seconds = int(settings.get("discussion_timer_seconds") or 120)
-        rt = runtime_state.get(session_id)
-        rt.day_sub_phase = "discussion"
-        rt.timer_name = "discussion"
-        rt.timer_seconds = discussion_seconds
-        rt.timer_started_at = _now()
+            settings = session.settings or {}
+            discussion_seconds = int(settings.get("discussion_timer_seconds") or 120)
+            rt = runtime_state.get(session_id)
+            rt.day_sub_phase = "discussion"
+            rt.vote_round = 1
+            rt.voting_candidate_ids = None
+            rt.timer_name = "discussion"
+            rt.timer_seconds = discussion_seconds
+            rt.timer_started_at = _now()
+            try:
+                await _emit_phase_changed(
+                    session_id,
+                    {
+                        "phase": {"type": "day", "number": phase_number},
+                        "sub_phase": "discussion",
+                        "night_turn": None,
+                        "timer_name": "discussion",
+                        "timer_seconds": discussion_seconds,
+                        "timer_started_at": rt.timer_started_at.isoformat(),
+                        "vote_round": 1,
+                    },
+                    db=db,
+                    phase_id=phase.id,
+                    persist=True,
+                )
+            except IntegrityError:
+                await db.rollback()
+                return
 
-        await ws_manager.send_to_session(
-            session_id,
-            {
-                "type": "phase_changed",
-                "payload": {
-                    "phase": {"type": "day", "number": phase_number},
-                    "sub_phase": "discussion",
-                    "timer_seconds": discussion_seconds,
-                    "timer_started_at": rt.timer_started_at.isoformat(),
-                    "announcement": disc_ann,
-                },
-            },
-        )
+            async def _to_voting():
+                await transition_to_voting(session_id)
 
-        async def _to_voting():
-            await transition_to_voting(session_id)
-
-        await timer_service.start_timer(session_id, "discussion", discussion_seconds, _to_voting)
+            await timer_service.start_timer(session_id, "discussion", discussion_seconds, _to_voting)
+    finally:
+        _end_phase_transition(session_id)
 
 
-async def transition_to_voting(session_id: uuid.UUID):
+async def transition_to_voting(
+    session_id: uuid.UUID,
+    *,
+    candidate_ids: list[uuid.UUID] | None = None,
+    round_number: int = 1,
+    intro_steps: list[dict] | None = None,
+):
     from core.database import async_session_factory
 
     rt = runtime_state.get(session_id)
     if rt.game_paused:
         return
+    _begin_phase_transition(session_id)
+    try:
+        async with async_session_factory() as db:
+            session = await db.get(Session, session_id)
+            if not session or session.status != "active":
+                return
+            phase = await get_current_phase(db, session_id)
+            if not phase or phase.phase_type != "day":
+                return
 
-    async with async_session_factory() as db:
-        session = await db.get(Session, session_id)
-        if not session or session.status != "active":
-            return
-        phase = await get_current_phase(db, session_id)
-        if not phase or phase.phase_type != "day":
-            return
+            settings = session.settings or {}
+            voting_seconds = int(settings.get("voting_timer_seconds") or 60)
+            rt = runtime_state.get(session_id)
+            rt.day_sub_phase = "voting"
+            rt.vote_round = round_number
+            rt.voting_candidate_ids = candidate_ids
+            rt.timer_name = "voting"
+            rt.timer_seconds = voting_seconds
+            rt.timer_started_at = None
 
-        settings = session.settings or {}
-        voting_seconds = int(settings.get("voting_timer_seconds") or 60)
-        rt = runtime_state.get(session_id)
-        rt.day_sub_phase = "voting"
-        rt.timer_name = "voting"
-        rt.timer_seconds = voting_seconds
-        rt.timer_started_at = _now()
-
-        vote_ann = _announcement("day_voting_start", str(session_id))
-        # Персистим смену подфазы -> voting
-        await _persist_phase_changed(
-            db,
-            session_id,
-            phase.id,
-            {
-                "phase": {"type": "day", "number": phase.phase_number},
-                "sub_phase": "voting",
-                "night_turn": None,
-                "timer_seconds": voting_seconds,
-                "timer_started_at": rt.timer_started_at.isoformat(),
-                "announcement": vote_ann,
-            },
-        )
-
-        # Рассылаем phase_changed каждому игроку персонально, включая available_targets
-        # (список живых, кроме себя и заблокированного), чтобы фронт мог отрисовать голосование
-        # без дополнительного GET /state.
-        players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
-        alive = [p for p in players if p.status == "alive"]
-        for p in players:
-            is_alive = p.status == "alive"
-            is_blocked = rt.day_blocked_player is not None and p.id == rt.day_blocked_player
-            targets = (
-                [
-                    {"player_id": str(t.id), "name": t.name}
-                    for t in alive
-                    if t.id != p.id
-                ]
-                if is_alive and not is_blocked
-                else []
-            )
-            await ws_manager.send_to_user(
-                session_id,
-                p.user_id,
-                {
-                    "type": "phase_changed",
-                    "payload": {
+            if intro_steps:
+                await _play_phase_announcements(
+                    session_id,
+                    {
                         "phase": {"type": "day", "number": phase.phase_number},
                         "sub_phase": "voting",
-                        "timer_seconds": voting_seconds,
-                        "timer_started_at": rt.timer_started_at.isoformat(),
-                        "announcement": vote_ann,
-                        "awaiting_action": is_alive and not is_blocked,
-                        "available_targets": targets,
+                        "timer_seconds": None,
+                        "timer_started_at": None,
                     },
+                    intro_steps,
+                    db=db,
+                    phase_id=phase.id,
+                    persist=True,
+                )
+                if rt.game_paused:
+                    return
+            elif round_number == 1:
+                await _play_phase_announcements(
+                    session_id,
+                    {
+                        "phase": {"type": "day", "number": phase.phase_number},
+                        "sub_phase": "voting",
+                        "timer_seconds": None,
+                        "timer_started_at": None,
+                    },
+                    day_voting_steps(f"{session_id}:day:{phase.phase_number}:voting_intro"),
+                    db=db,
+                    phase_id=phase.id,
+                    persist=True,
+                )
+                if rt.game_paused:
+                    return
+
+            rt.timer_started_at = _now()
+            await _persist_phase_changed(
+                db,
+                session_id,
+                phase.id,
+                {
+                    "phase": {"type": "day", "number": phase.phase_number},
+                    "sub_phase": "voting",
+                    "night_turn": None,
+                    "timer_name": "voting",
+                    "timer_seconds": voting_seconds,
+                    "timer_started_at": rt.timer_started_at.isoformat(),
+                    "vote_round": round_number,
+                    "candidate_ids": [str(cid) for cid in candidate_ids] if candidate_ids else None,
                 },
             )
 
-        async def _resolve():
-            await resolve_votes(session_id)
+            # Рассылаем phase_changed каждому игроку персонально, включая available_targets
+            # (список живых, кроме себя и заблокированного), чтобы фронт мог отрисовать голосование
+            # без дополнительного GET /state.
+            players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
+            alive = [p for p in players if p.status == "alive"]
+            alive_candidates = [p for p in alive if candidate_ids is None or p.id in candidate_ids]
+            for p in players:
+                is_alive = p.status == "alive"
+                is_blocked = rt.day_blocked_player is not None and p.id == rt.day_blocked_player
+                targets = (
+                    [
+                        {"player_id": str(t.id), "name": t.name}
+                        for t in alive_candidates
+                        if t.id != p.id
+                    ]
+                    if is_alive and not is_blocked
+                    else []
+                )
+                await ws_manager.send_to_user(
+                    session_id,
+                    p.user_id,
+                    {
+                        "type": "phase_changed",
+                        "payload": {
+                            "phase": {"type": "day", "number": phase.phase_number},
+                            "sub_phase": "voting",
+                            "timer_seconds": voting_seconds,
+                            "timer_started_at": rt.timer_started_at.isoformat(),
+                            "vote_round": round_number,
+                            "awaiting_action": is_alive and not is_blocked,
+                            "available_targets": targets,
+                        },
+                    },
+                )
 
-        await timer_service.start_timer(session_id, "voting", voting_seconds, _resolve)
+            async def _resolve():
+                await resolve_votes(session_id)
+
+            await timer_service.start_timer(session_id, "voting", voting_seconds, _resolve)
+    finally:
+        _end_phase_transition(session_id)
 
 
 async def resolve_votes(session_id: uuid.UUID):
@@ -1012,89 +1217,161 @@ async def resolve_votes(session_id: uuid.UUID):
     rt_check = runtime_state.get(session_id)
     if rt_check.game_paused:
         return
+    _begin_phase_transition(session_id)
+    try:
+        async with async_session_factory() as db:
+            session = await db.get(Session, session_id)
+            if not session or session.status != "active":
+                return
+            phase = await get_current_phase(db, session_id)
+            if not phase or phase.phase_type != "day":
+                return
 
-    async with async_session_factory() as db:
-        session = await db.get(Session, session_id)
-        if not session or session.status != "active":
-            return
-        phase = await get_current_phase(db, session_id)
-        if not phase or phase.phase_type != "day":
-            return
+            rt = runtime_state.get(session_id)
 
-        # собрать голоса
-        votes = (await db.scalars(select(DayVote).where(DayVote.phase_id == phase.id))).all()
-        # подсчёт
-        counts: dict[uuid.UUID, int] = {}
-        for v in votes:
-            if v.target_player_id is None:
-                continue
-            counts[v.target_player_id] = counts.get(v.target_player_id, 0) + 1
+            votes = (await db.scalars(select(DayVote).where(DayVote.phase_id == phase.id))).all()
+            counts: dict[uuid.UUID, int] = {}
+            for v in votes:
+                if v.target_player_id is None:
+                    continue
+                counts[v.target_player_id] = counts.get(v.target_player_id, 0) + 1
 
-        eliminated_id: uuid.UUID | None = None
-        if counts:
-            sorted_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)
-            if len(sorted_items) == 1 or sorted_items[0][1] > sorted_items[1][1]:
-                eliminated_id = sorted_items[0][0]
+            eliminated_id: uuid.UUID | None = None
+            tied_ids: list[uuid.UUID] = []
+            if counts:
+                sorted_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+                top_votes = sorted_items[0][1]
+                tied_ids = [player_id for player_id, votes_count in sorted_items if votes_count == top_votes]
+                if len(tied_ids) == 1:
+                    eliminated_id = sorted_items[0][0]
+                elif rt.vote_round >= 2:
+                    eliminated_id = random.choice(tied_ids)
 
-        eliminated_player = await db.get(Player, eliminated_id) if eliminated_id else None
-        if eliminated_player and eliminated_player.status == "alive":
-            eliminated_player.status = "dead"
+            all_votes = [
+                {
+                    "voter_player_id": str(v.voter_player_id),
+                    "target_player_id": str(v.target_player_id) if v.target_player_id else None,
+                }
+                for v in votes
+            ]
+            if tied_ids and eliminated_id is None and rt.vote_round == 1:
+                tie_steps = vote_tie_steps(f"{session_id}:day:{phase.phase_number}:vote_tie")
+                db.add(
+                    GameEvent(
+                        id=uuid.uuid4(),
+                        session_id=session_id,
+                        phase_id=phase.id,
+                        event_type="vote_result",
+                        payload={
+                            "eliminated": None,
+                            "votes": all_votes,
+                            "tie": True,
+                            "candidate_ids": [str(tid) for tid in tied_ids],
+                            "announcement": tie_steps[0],
+                        },
+                    )
+                )
+                await db.commit()
+                await ws_manager.send_to_session(
+                    session_id,
+                    {
+                        "type": "vote_result",
+                        "payload": {
+                            "eliminated": None,
+                            "votes": all_votes,
+                            "tie": True,
+                            "candidate_ids": [str(tid) for tid in tied_ids],
+                            "announcement": tie_steps[0],
+                        },
+                    },
+                )
+                await _wait_or_pause(session_id, (tie_steps[0].get("duration_ms") or 0) / 1000)
+                await db.execute(delete(DayVote).where(DayVote.phase_id == phase.id))
+                await db.commit()
+                await transition_to_voting(
+                    session_id,
+                    candidate_ids=tied_ids,
+                    round_number=2,
+                )
+                return
 
-        all_votes = [{"voter_player_id": str(v.voter_player_id), "target_player_id": str(v.target_player_id) if v.target_player_id else None} for v in votes]
-        db.add(
-            GameEvent(
-                id=uuid.uuid4(),
-                session_id=session_id,
-                phase_id=phase.id,
-                event_type="vote_result",
-                payload={"eliminated": str(eliminated_id) if eliminated_id else None, "votes": all_votes},
+            eliminated_player = await db.get(Player, eliminated_id) if eliminated_id else None
+            if eliminated_player and eliminated_player.status == "alive":
+                eliminated_player.status = "dead"
+
+            winner = await check_win_condition(db, session_id) if eliminated_player else None
+            vote_steps = [] if winner else vote_result_steps(
+                f"{session_id}:day:{phase.phase_number}:vote_result:{rt.vote_round}",
+                eliminated_name=(eliminated_player.name if eliminated_player else None),
+                random_elimination=bool(rt.vote_round >= 2 and len(tied_ids) > 1 and eliminated_player),
+                unanimous_revote=bool(rt.vote_round >= 2 and len(tied_ids) <= 1 and eliminated_player),
             )
-        )
-        if eliminated_player and eliminated_player.status == "dead":
             db.add(
                 GameEvent(
                     id=uuid.uuid4(),
                     session_id=session_id,
                     phase_id=phase.id,
-                    event_type="player_eliminated",
-                    payload={"player_id": str(eliminated_player.id), "name": eliminated_player.name, "cause": "vote"},
+                    event_type="vote_result",
+                    payload={
+                        "eliminated": str(eliminated_id) if eliminated_id else None,
+                        "votes": all_votes,
+                        "vote_round": rt.vote_round,
+                        "announcement": vote_steps[0] if vote_steps else None,
+                    },
                 )
             )
-        await db.commit()
+            if eliminated_player and eliminated_player.status == "dead":
+                db.add(
+                    GameEvent(
+                        id=uuid.uuid4(),
+                        session_id=session_id,
+                        phase_id=phase.id,
+                        event_type="player_eliminated",
+                        payload={"player_id": str(eliminated_player.id), "name": eliminated_player.name, "cause": "vote"},
+                    )
+                )
+            await db.commit()
 
-        await ws_manager.send_to_session(
-            session_id,
-            {
-                "type": "vote_result",
-                "payload": {
-                    "eliminated": (
-                        {"player_id": str(eliminated_player.id), "name": eliminated_player.name}
-                        if eliminated_player and eliminated_id
-                        else None
-                    ),
-                    "votes": all_votes,
-                    "announcement": _announcement("vote_result", str(session.id)),
-                },
-            },
-        )
-        if eliminated_player and eliminated_id:
             await ws_manager.send_to_session(
                 session_id,
                 {
-                    "type": "player_eliminated",
-                    "payload": {"player_id": str(eliminated_player.id), "name": eliminated_player.name, "cause": "vote"},
+                    "type": "vote_result",
+                    "payload": {
+                        "eliminated": (
+                            {"player_id": str(eliminated_player.id), "name": eliminated_player.name}
+                            if eliminated_player and eliminated_id
+                            else None
+                        ),
+                        "votes": all_votes,
+                        "vote_round": rt.vote_round,
+                        "announcement": vote_steps[0] if vote_steps else None,
+                    },
                 },
             )
+            if eliminated_player and eliminated_id:
+                await ws_manager.send_to_session(
+                    session_id,
+                    {
+                        "type": "player_eliminated",
+                        "payload": {"player_id": str(eliminated_player.id), "name": eliminated_player.name, "cause": "vote"},
+                    },
+                )
 
-        winner = await check_win_condition(db, session_id)
-        if winner:
-            await finish_game(db, session, winner)
-            return
+            if winner:
+                await finish_game(
+                    db,
+                    session,
+                    winner,
+                    eliminated_name=(eliminated_player.name if eliminated_player else None),
+                )
+                return
 
-        # закончить день -> ночь+1
-        phase.ended_at = _now()
-        await db.commit()
-        await transition_to_night(session_id, phase.phase_number + 1)
+            if vote_steps:
+                await _wait_or_pause(session_id, (vote_steps[0].get("duration_ms") or 0) / 1000)
+
+            await transition_to_night(session_id, phase.phase_number + 1)
+    finally:
+        _end_phase_transition(session_id)
 
 
 async def apply_host_kick(db: AsyncSession, session: Session, kicked: Player) -> None:
@@ -1168,7 +1445,14 @@ async def apply_host_kick(db: AsyncSession, session: Session, kicked: Player) ->
             await resolve_votes(session.id)
 
 
-async def finish_game(db: AsyncSession, session: Session, winner: str) -> None:
+async def finish_game(
+    db: AsyncSession,
+    session: Session,
+    winner: str,
+    *,
+    eliminated_name: str | None = None,
+    before_voting: bool = False,
+) -> None:
     session.status = "finished"
     session.ended_at = _now()
     cur = dict(session.settings or {})
@@ -1208,7 +1492,16 @@ async def finish_game(db: AsyncSession, session: Session, winner: str) -> None:
         session.id,
         {
             "type": "game_finished",
-            "payload": {"winner": winner, "players": payload_players, "announcement": _announcement("game_finished", str(session.id))},
+            "payload": {
+                "winner": winner,
+                "players": payload_players,
+                "announcement": game_finished_steps(
+                    f"{session.id}:finished:{winner}:{session.ended_at.isoformat() if session.ended_at else 'end'}",
+                    winner=winner,
+                    eliminated_name=eliminated_name,
+                    before_voting=before_voting,
+                )[0],
+            },
         },
     )
     await timer_service.cancel_all(session.id)

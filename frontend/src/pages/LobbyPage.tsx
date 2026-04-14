@@ -22,6 +22,7 @@ export default function LobbyPage() {
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
@@ -177,10 +178,11 @@ export default function LobbyPage() {
     const newSpecial = getSpecialRolesCount(newConfig);
     if (newSpecial > MAX_PLAYERS) return;
     try {
+      setSettingsError(null);
       await setSettings({ role_config: newConfig });
     } catch (err: any) {
       const parsed = parseApiError(err);
-      setLoadError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+      setSettingsError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
     }
   };
 
@@ -191,10 +193,11 @@ export default function LobbyPage() {
     role_reveal_timer_seconds: number;
   }>) => {
     try {
+      setSettingsError(null);
       await setSettings(partial);
     } catch (err: any) {
       const parsed = parseApiError(err);
-      setLoadError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+      setSettingsError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
     }
   };
 
@@ -353,7 +356,7 @@ export default function LobbyPage() {
 
           <div className="lobby-settings__section">
             <h4 className="lobby-settings__section-title">Роли</h4>
-            <Stepper label="Мафия" value={settings.role_config.mafia} min={0} max={2}
+            <Stepper label="Мафия" value={settings.role_config.mafia} min={1} max={2}
               onChange={(v) => updateRoleConfig('mafia', v)} />
             <Stepper label="Дон Мафии" value={settings.role_config.don} min={0} max={1}
               onChange={(v) => updateRoleConfig('don', v)} />
@@ -370,6 +373,7 @@ export default function LobbyPage() {
               <span className="lobby-settings__civilians-label">Мирные жители</span>
               <span className="lobby-settings__civilians-count">{civiliansCount}</span>
             </div>
+            <p className="lobby-settings__hint">В партии должна быть минимум 1 мафия.</p>
 
             <div className="lobby-settings__roles-summary">
               <span>Спец. ролей: {specialCount}</span>
@@ -380,6 +384,12 @@ export default function LobbyPage() {
                 </span>
               )}
             </div>
+
+            {settingsError && (
+              <div className="lobby-start__error" onClick={() => setSettingsError(null)}>
+                {settingsError}
+              </div>
+            )}
           </div>
 
           <div className="lobby-settings__section">

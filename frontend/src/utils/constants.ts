@@ -24,7 +24,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
   game_already_started: 'Игра уже началась',
   already_joined: 'Вы уже в этой сессии',
   pro_required: 'Для этого количества игроков нужна подписка Pro',
-  invalid_role_config: 'Сумма ролей не равна количеству игроков',
+  invalid_role_config: 'Проверьте баланс ролей: в партии должна быть хотя бы одна мафия, и мафия должна быть меньше города',
   not_host: 'Действие доступно только хосту',
   confirmation_required: 'Требуется подтверждение',
   wrong_phase: 'Действие сейчас недоступно',

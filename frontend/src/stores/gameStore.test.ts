@@ -1,8 +1,16 @@
 import { useGameStore } from './gameStore';
+import { gameApi } from '../api/gameApi';
+
+jest.mock('../api/gameApi', () => ({
+  gameApi: {
+    getState: jest.fn(),
+  },
+}));
 
 describe('gameStore role reveal sync', () => {
   beforeEach(() => {
     useGameStore.getState().reset();
+    jest.clearAllMocks();
   });
 
   it('updates both acknowledged count and total players from websocket payload', () => {
@@ -22,5 +30,158 @@ describe('gameStore role reveal sync', () => {
     useGameStore.getState().applyAllAcknowledged();
 
     expect(useGameStore.getState().acknowledgedCount).toBe(5);
+  });
+
+  it('keeps active session without phase in syncing instead of role reveal', async () => {
+    (gameApi.getState as jest.Mock).mockResolvedValue({
+      data: {
+        session_status: 'active',
+        game_paused: false,
+        settings: {},
+        phase: {
+          id: null,
+          type: null,
+          number: null,
+          sub_phase: null,
+          started_at: null,
+          timer_seconds: null,
+          timer_started_at: null,
+          vote_round: 1,
+        } as any,
+        my_player: {
+          id: 'p1',
+          name: 'Игрок',
+          status: 'alive',
+          role: { slug: 'doctor', name: 'Доктор', team: 'city', abilities: { night_action: 'heal' } },
+        },
+        players: [{ id: 'p1', name: 'Игрок', status: 'alive', join_order: 1 }],
+        role_reveal: null,
+        awaiting_action: false,
+        action_type: null,
+        available_targets: [],
+        my_action_submitted: false,
+        votes: null,
+        result: null,
+        announcement: null,
+      },
+    });
+
+    await useGameStore.getState().loadState('session-1');
+
+    expect(useGameStore.getState().screen).toBe('syncing');
+  });
+
+  it('ignores stale game_started when active phase is already in progress', () => {
+    useGameStore.setState({
+      phase: {
+        id: 'phase-1',
+        type: 'night',
+        number: 1,
+        sub_phase: null,
+        started_at: '2026-04-14T12:00:00.000Z',
+        timer_seconds: 30,
+        timer_started_at: '2026-04-14T12:00:00.000Z',
+      },
+      screen: 'night_waiting',
+      acknowledged: true,
+      acknowledgedCount: 5,
+    });
+
+    useGameStore.getState().onGameStarted({
+      phase: { type: 'role_reveal', number: 0 },
+      timer_seconds: 15,
+      started_at: '2026-04-14T11:00:00.000Z',
+    });
+
+    expect(useGameStore.getState().screen).toBe('night_waiting');
+    expect(useGameStore.getState().phase?.type).toBe('night');
+  });
+
+  it('preserves submitted night action on identical resync', async () => {
+    useGameStore.setState({
+      phase: {
+        id: 'night-1',
+        type: 'night',
+        number: 1,
+        sub_phase: null,
+        started_at: '2026-04-14T12:00:00.000Z',
+        timer_seconds: 25,
+        timer_started_at: '2026-04-14T12:00:00.000Z',
+      },
+      screen: 'night_action',
+      actionType: 'kill',
+      actionSubmitted: true,
+      selectedTarget: 'p2',
+    });
+
+    (gameApi.getState as jest.Mock).mockResolvedValue({
+      data: {
+        session_status: 'active',
+        game_paused: false,
+        settings: {},
+        phase: {
+          id: 'night-1',
+          type: 'night',
+          number: 1,
+          sub_phase: null,
+          started_at: '2026-04-14T12:00:00.000Z',
+          timer_seconds: 25,
+          timer_started_at: '2026-04-14T12:00:00.000Z',
+        },
+        my_player: {
+          id: 'p1',
+          name: 'Игрок',
+          status: 'alive',
+          role: { slug: 'mafia', name: 'Мафия', team: 'mafia', abilities: { night_action: 'kill' } },
+        },
+        players: [
+          { id: 'p1', name: 'Игрок', status: 'alive', join_order: 1 },
+          { id: 'p2', name: 'Жертва', status: 'alive', join_order: 2 },
+        ],
+        role_reveal: null,
+        awaiting_action: true,
+        action_type: 'kill',
+        available_targets: [{ player_id: 'p2', name: 'Жертва' }],
+        my_action_submitted: true,
+        votes: null,
+        result: null,
+        announcement: null,
+      },
+    });
+
+    await useGameStore.getState().loadState('session-1');
+
+    const state = useGameStore.getState();
+    expect(state.screen).toBe('night_action');
+    expect(state.actionSubmitted).toBe(true);
+    expect(state.selectedTarget).toBe('p2');
+  });
+
+  it('does not reset submitted action for duplicate action_required payload', () => {
+    useGameStore.setState({
+      phase: {
+        id: 'night-1',
+        type: 'night',
+        number: 1,
+        sub_phase: null,
+        started_at: '2026-04-14T12:00:00.000Z',
+        timer_seconds: 25,
+        timer_started_at: '2026-04-14T12:00:00.000Z',
+      },
+      screen: 'night_action',
+      actionType: 'heal',
+      actionSubmitted: true,
+      selectedTarget: 'p2',
+    });
+
+    useGameStore.getState().applyActionRequired({
+      action_type: 'heal',
+      timer_started_at: '2026-04-14T12:00:00.000Z',
+      available_targets: [{ player_id: 'p2', name: 'Игрок 2' }],
+    });
+
+    const state = useGameStore.getState();
+    expect(state.actionSubmitted).toBe(true);
+    expect(state.selectedTarget).toBe('p2');
   });
 });

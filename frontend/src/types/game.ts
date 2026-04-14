@@ -26,12 +26,19 @@ export interface Phase {
   started_at: string;         // ISO 8601
   timer_seconds: number | null;
   timer_started_at: string | null; // ISO 8601
+  vote_round?: number;
 }
 
 export interface Announcement {
-  audio_url: string;
+  audio_url?: string;
   text: string;
   duration_ms: number;
+  key?: string;
+  trigger?: string;
+  step_index?: number;
+  steps_total?: number;
+  blocking?: boolean;
+  seed?: number;
 }
 
 export interface MyPlayer {

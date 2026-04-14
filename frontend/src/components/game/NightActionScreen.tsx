@@ -37,7 +37,7 @@ export default function NightActionScreen() {
   }, [actionType, phase?.timer_seconds, phase?.timer_started_at, nightActionTimer]);
 
   useEffect(() => {
-    if (actionSubmitted || timeLeft <= 0 || timerPaused) {
+    if (timeLeft <= 0 || timerPaused) {
       if (intervalRef.current) clearInterval(intervalRef.current);
       return;
     }
@@ -45,7 +45,7 @@ export default function NightActionScreen() {
       setTimeLeft((t) => (t <= 1 ? 0 : t - 1));
     }, 1000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [actionSubmitted, timeLeft, timerPaused]);
+  }, [timeLeft, timerPaused]);
 
   // Surface a newly arrived check result (from WS or inline response).
   useEffect(() => {
@@ -119,23 +119,6 @@ export default function NightActionScreen() {
     }
   };
 
-  if (actionSubmitted && !showCheckResult) {
-    return (
-      <div className="night-action night-action--submitted">
-        <div className="night-action__ambient" />
-        <div className="night-action__submitted-content">
-          <div className="night-action__check-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="20 6 9 17 4 12" />
-            </svg>
-          </div>
-          <h2 className="night-action__submitted-title">Ваш выбор принят</h2>
-          <p className="night-action__submitted-hint">Ожидание других игроков...</p>
-        </div>
-      </div>
-    );
-  }
-
   if (showCheckResult) {
     const isCheck = showCheckResult.actionType === 'check';
     const isDonCheck = showCheckResult.actionType === 'don_check';
@@ -202,6 +185,15 @@ export default function NightActionScreen() {
 
       <div className="night-action__label">{actionLabel}</div>
 
+      {actionSubmitted && (
+        <div className="night-action__heal-restriction">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="16" height="16">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <span>Ваш выбор принят. Ход завершится, когда таймер истечёт.</span>
+        </div>
+      )}
+
       {healRestriction && actionType === 'heal' && (
         <div className="night-action__heal-restriction">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="16" height="16">
@@ -247,13 +239,13 @@ export default function NightActionScreen() {
       <div className="night-action__actions">
         <button
           className="night-action__confirm"
-          disabled={!selectedTarget || submitting}
+          disabled={!selectedTarget || submitting || actionSubmitted}
           onClick={handleConfirm}
         >
           <span className="night-action__confirm-glow" />
           <span className="night-action__confirm-content">
             <span className="night-action__confirm-text">
-              {submitting ? 'Отправка...' : 'Подтвердить'}
+              {actionSubmitted ? 'Выбор принят' : submitting ? 'Отправка...' : 'Подтвердить'}
             </span>
           </span>
         </button>

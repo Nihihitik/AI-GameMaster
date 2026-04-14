@@ -210,6 +210,13 @@ export default function GamePage() {
   // Render based on current screen
   const renderScreen = () => {
     switch (screen) {
+      case 'syncing':
+        return (
+          <div className="game-loading">
+            <Loader size={48} />
+          </div>
+        );
+
       case 'role_reveal':
         return (
           <div className={`role-page ${!flipped ? 'role-page--preflip' : ''}`}>

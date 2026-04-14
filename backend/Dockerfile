@@ -1,24 +1,24 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# В контейнере кэш и venv на разных слоях FS — без copy uv спамит предупреждением о hardlink
-ENV UV_LINK_MODE=copy
+ENV UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Установка менеджера пакетов uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Пин версии uv — воспроизводимые сборки вместо :latest
+COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /bin/
 
-# Копирование файлов зависимостей
 COPY pyproject.toml uv.lock ./
 
-# Установка зависимостей
-RUN uv sync --frozen --no-dev
+# Cache-mount на uv-кэш ускоряет пересборку при неизменных lock'ах
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
 
-# Копирование исходного кода приложения
 COPY . .
 
-# Порт, на котором работает приложение
 EXPOSE 8000
 
-# Запуск FastAPI через uvicorn
 CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

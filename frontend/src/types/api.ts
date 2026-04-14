@@ -140,6 +140,7 @@ export interface GameStateResponse {
   session_status: 'active' | 'finished';
   game_paused: boolean;
   phase: Phase;
+  announcement?: GameResult['announcement'] | null;
   my_player: MyPlayer & {
     is_blocked_tonight?: boolean;
   };

@@ -21,9 +21,10 @@ from models.player import Player
 from models.role import Role
 from models.session import Session
 from services.game_engine import acknowledge_role, get_current_phase, start_game, transition_to_voting
+from services.recovery_service import recover_missing_phase
 from services.runtime_state import runtime_state
 from services.ws_manager import ws_manager
-from services.state_service import restore_runtime_like_fields
+from services.state_service import get_last_known_phase, restore_runtime_like_fields
 
 
 router = APIRouter()
@@ -224,8 +225,6 @@ async def night_action(
         current_user.id,
         {"type": "action_confirmed", "payload": {"action_type": action_type}},
     )
-    rt.night_action_event.set()
-
     resp = {"action_type": action_type, "target_player_id": str(target.id), "confirmed": True}
 
     if action_type == "check":
@@ -347,6 +346,13 @@ async def state(
         raise GameError(403, "wrong_phase", "Игра ещё не началась")
 
     phase = await get_current_phase(db, session_id)
+    if phase is None and session.status == "active":
+        await recover_missing_phase(session_id)
+        db.expire_all()
+        phase = await get_current_phase(db, session_id)
+    if phase is None and session.status == "active":
+        phase = await get_last_known_phase(db, session_id)
+
     restored = await restore_runtime_like_fields(db, session_id, phase)
     rt = runtime_state.get(session_id)
     # если runtime потерян (рестарт), используем восстановленные значения
@@ -354,10 +360,17 @@ async def state(
         rt.day_sub_phase = restored["sub_phase"]
     if restored["night_turn"] is not None:
         rt.night_turn = restored["night_turn"]
+    if restored["timer_name"] is not None:
+        rt.timer_name = restored["timer_name"]
     if restored["timer_started_at"] is not None:
         rt.timer_started_at = restored["timer_started_at"]
     if restored["timer_seconds"] is not None:
         rt.timer_seconds = restored["timer_seconds"]
+    rt.vote_round = int(restored.get("vote_round") or rt.vote_round or 1)
+    if restored.get("candidate_ids") is not None:
+        rt.voting_candidate_ids = restored["candidate_ids"]
+    if restored.get("announcement") is not None and rt.current_announcement is None:
+        rt.current_announcement = restored["announcement"]
 
     # роль игрока
     role = await db.get(Role, player.role_id) if player.role_id else None
@@ -400,6 +413,7 @@ async def state(
             "started_at": phase.started_at.isoformat() if phase else None,
             "timer_seconds": effective_timer_seconds,
             "timer_started_at": effective_timer_started_at,
+            "vote_round": rt.vote_round if phase and phase.phase_type == "day" and rt.day_sub_phase == "voting" else 1,
         },
         "my_player": {
             "id": str(player.id),
@@ -420,6 +434,7 @@ async def state(
         "action_type": None,
         "available_targets": [],
         "my_action_submitted": False,
+        "announcement": rt.current_announcement,
     }
 
     if phase and phase.phase_type == "day":
@@ -455,7 +470,16 @@ async def state(
     # awaiting action during night turn
     if phase and phase.phase_type == "night" and role:
         night_action = (role.abilities or {}).get("night_action")
-        if night_action:
+        current_turn = rt.night_turn
+        current_turn_matches = (
+            (current_turn == "mafia" and night_action == "kill" and role.team == "mafia")
+            or (current_turn == "doctor" and night_action == "heal")
+            or (current_turn == "sheriff" and night_action == "check")
+            or (current_turn == "don" and night_action == "don_check")
+            or (current_turn == "lover" and night_action == "lover_visit")
+            or (current_turn == "maniac" and night_action == "maniac_kill")
+        )
+        if night_action and current_turn_matches:
             response["action_type"] = night_action
             # Если заблокирован любовницей — действие недоступно.
             response["awaiting_action"] = not is_blocked_tonight
@@ -535,10 +559,13 @@ async def state(
         # Voting targets (alive except self, excluding blocked)
         is_voter_blocked = rt.day_blocked_player is not None and rt.day_blocked_player == player.id
         if player.status == "alive" and not is_voter_blocked:
+            candidate_ids = set(rt.voting_candidate_ids or [])
             response["available_targets"] = [
                 {"player_id": str(p.id), "name": p.name}
                 for p in all_players
-                if p.status == "alive" and p.id != player.id
+                if p.status == "alive"
+                and p.id != player.id
+                and (not candidate_ids or p.id in candidate_ids)
             ]
             response["awaiting_action"] = True
 

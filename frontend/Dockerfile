@@ -1,24 +1,25 @@
+# syntax=docker/dockerfile:1.7
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Сначала ставим зависимости отдельным слоем для кэша.
-# Используем `npm install`, а не `npm ci`, чтобы толерантно обрабатывать
-# мелкие рассинхроны между package.json и package-lock.json в dev-контуре
-# (в проде перед релизом локалку актуализируют и можно переключаться на ci).
+ENV CHOKIDAR_USEPOLLING=true \
+    WATCHPACK_POLLING=true \
+    HOST=0.0.0.0 \
+    PORT=3000 \
+    CI=false \
+    BROWSER=none \
+    NODE_ENV=development
+
+# Слой зависимостей отдельно от исходников — кэшируется при неизменных lock'ах.
+# --legacy-peer-deps нужен из-за связки React 19 + react-scripts 5
+# (CRA не знает про новые peer-range'ы и падает на strict-резолвере npm 7+).
 COPY package.json package-lock.json ./
-RUN npm install --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --legacy-peer-deps --no-audit --no-fund
 
-# Копируем исходники
+# Исходники (перетираются bind-mount'ом в compose, нужны для standalone-сборки)
 COPY . .
-
-# Polling нужен для file-watcher'а CRA в Linux-контейнере (иначе hot reload
-# не видит изменений из смонтированного volume).
-ENV CHOKIDAR_USEPOLLING=true
-ENV WATCHPACK_POLLING=true
-# CRA dev-server слушает все интерфейсы внутри контейнера
-ENV HOST=0.0.0.0
-ENV PORT=3000
 
 EXPOSE 3000
 

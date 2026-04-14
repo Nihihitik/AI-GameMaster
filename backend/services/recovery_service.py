@@ -22,11 +22,12 @@ from services.game_engine import (
     execute_night_sequence,
     get_current_phase,
     resolve_votes,
+    transition_to_day,
     transition_to_night,
     transition_to_voting,
 )
 from services.runtime_state import runtime_state
-from services.state_service import restore_runtime_like_fields
+from services.state_service import get_last_known_phase, restore_runtime_like_fields
 from services.timer_service import timer_service
 
 
@@ -52,14 +53,21 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
         gp = (session.settings or {}).get("game_pause")
         if isinstance(gp, dict) and gp.get("paused"):
             return
+        rt = runtime_state.get(session_id)
+        if rt.phase_transition_running or rt.night_sequence_running:
+            return
         phase = await get_current_phase(db, session_id)
         if not phase:
+            latest_phase = await get_last_known_phase(db, session_id)
+            if not latest_phase:
+                return
+            await _recover_missing_phase(session_id, latest_phase)
             return
 
         restored = await restore_runtime_like_fields(db, session_id, phase)
-        rt = runtime_state.get(session_id)
         rt.day_sub_phase = restored["sub_phase"]
         rt.night_turn = restored["night_turn"]
+        rt.timer_name = restored["timer_name"]
         rt.timer_seconds = restored["timer_seconds"]
         rt.timer_started_at = restored["timer_started_at"]
 
@@ -99,8 +107,6 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
 
         # night: возобновить последовательность
         if phase.phase_type == "night":
-            if rt.night_sequence_running:
-                return
             rt.night_sequence_running = True
 
             async def _run():
@@ -110,12 +116,43 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
                         s2 = await db2.get(Session, session_id)
                         p2 = await db2.get(GamePhase, phase.id)
                         if s2 and p2:
-                            await execute_night_sequence(db2, s2, p2)
+                            resume_from = None
+                            if rt.night_turn:
+                                seconds_for_turn = remaining if remaining is not None and remaining > 0 else int((s2.settings or {}).get("night_action_timer_seconds") or 30)
+                                resume_from = (rt.night_turn, max(1, seconds_for_turn))
+                            await execute_night_sequence(db2, s2, p2, resume_from=resume_from)
                 finally:
                     rt.night_sequence_running = False
 
             asyncio.create_task(_run())
             return
+
+
+async def _recover_missing_phase(session_id: uuid.UUID, latest_phase: GamePhase) -> None:
+    rt = runtime_state.get(session_id)
+    if rt.phase_transition_running or rt.night_sequence_running:
+        return
+    async with async_session_factory() as db:
+        await restore_runtime_like_fields(db, session_id, latest_phase)
+
+    if latest_phase.phase_type == "role_reveal":
+        await transition_to_night(session_id, 1)
+        return
+
+    if latest_phase.phase_type == "night":
+        await transition_to_day(session_id, latest_phase.phase_number)
+        return
+
+    if latest_phase.phase_type == "day":
+        await transition_to_night(session_id, latest_phase.phase_number + 1)
+
+
+async def recover_missing_phase(session_id: uuid.UUID) -> None:
+    async with async_session_factory() as db:
+        latest_phase = await get_last_known_phase(db, session_id)
+        if not latest_phase:
+            return
+    await _recover_missing_phase(session_id, latest_phase)
 
 
 async def recovery_loop(poll_seconds: int = 3) -> None:
@@ -132,4 +169,3 @@ async def recovery_loop(poll_seconds: int = 3) -> None:
             # не заваливаем сервер — recovery должен быть "best effort"
             pass
         await asyncio.sleep(poll_seconds)
-
