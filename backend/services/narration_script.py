@@ -7,7 +7,7 @@ from dataclasses import dataclass
 TYPE_SPEED_MS = 45
 POST_BUFFER_MS = 1400
 MIN_DURATION_MS = 2600
-MAX_DURATION_MS = 9000
+MAX_DURATION_MS = 30000
 
 
 def _hash_int(raw: str) -> int:

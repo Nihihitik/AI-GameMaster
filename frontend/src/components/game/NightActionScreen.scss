@@ -60,6 +60,12 @@
     padding: 20px 20px 8px;
     position: relative;
     z-index: 1;
+
+    .pause-btn {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+    }
   }
 
   &__title {
