@@ -217,7 +217,7 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
     if player.status != "alive":
         raise GameError(403, "player_dead", "Выбывшие игроки не могут совершать действия")
 
-    exists = await db.scalar(
+    existing_ack = await db.scalar(
         select(GameEvent.id).where(
             GameEvent.session_id == session.id,
             GameEvent.phase_id == phase.id,
@@ -225,7 +225,7 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
             GameEvent.payload["player_id"].astext == str(player.id),
         )
     )
-    if exists:
+    if existing_ack:
         raise GameError(409, "action_already_submitted", "Вы уже сделали выбор в этой фазе")
 
     db.add(
@@ -1213,4 +1213,3 @@ async def finish_game(db: AsyncSession, session: Session, winner: str) -> None:
     )
     await timer_service.cancel_all(session.id)
     runtime_state.clear(session.id)
-

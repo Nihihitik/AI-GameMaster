@@ -555,7 +555,11 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   applyRoleAcknowledged: (payload) => {
     const acked = Number(payload?.players_acknowledged ?? 0);
-    set({ acknowledgedCount: acked });
+    const total = payload?.players_total;
+    set({
+      acknowledgedCount: acked,
+      ...(total != null ? { totalPlayers: Number(total) } : {}),
+    });
   },
 
   applyAllAcknowledged: () => {

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from core.config import settings
 from core.exceptions import GameError, game_error_handler
 from services.recovery_service import recovery_loop
+from services.role_catalog import ensure_role_catalog
 
 import asyncio
 
@@ -66,6 +67,8 @@ app.include_router(ws_router, prefix="/ws", tags=["ws"])
 
 @app.on_event("startup")
 async def _startup_recovery():
+    # Справочник ролей должен существовать до любых игровых действий и recovery.
+    await ensure_role_catalog()
     # Продакшн-режим: поднимаем фоновый recovery, который продолжает активные игры
     asyncio.create_task(recovery_loop())
 

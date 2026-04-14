@@ -260,6 +260,15 @@ export default function GamePage() {
                 </div>
               </div>
 
+              <div className="role-progress" aria-live="polite">
+                <div className="role-progress__counter">
+                  <span className="role-progress__count">{acknowledgedCount}</span>
+                  <span className="role-progress__separator">/</span>
+                  <span className="role-progress__total">{totalPlayers}</span>
+                </div>
+                <p className="role-progress__text">Ознакомились с ролями</p>
+              </div>
+
               {flipped && !acknowledged && (
                 <div className="role-acknowledge">
                   <Button onClick={handleAcknowledge}>Ознакомлен</Button>
@@ -268,11 +277,6 @@ export default function GamePage() {
 
               {acknowledged && (
                 <div className="role-waiting">
-                  <div className="role-waiting__counter">
-                    <span className="role-waiting__count">{acknowledgedCount}</span>
-                    <span className="role-waiting__separator">/</span>
-                    <span className="role-waiting__total">{totalPlayers}</span>
-                  </div>
                   <p className="role-waiting__text">Ожидание остальных игроков...</p>
                   <Loader size={32} />
                 </div>

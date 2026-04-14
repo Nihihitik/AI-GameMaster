@@ -233,24 +233,12 @@ $card-h: 380px;
   animation: role-fade-up 0.5s ease;
 }
 
-@keyframes role-fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* ===== Waiting ===== */
-.role-waiting {
+.role-progress {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
-  padding: 24px 0;
+  gap: 8px;
+  padding: 8px 0 4px;
   animation: role-fade-up 0.5s ease;
 
   &__counter {
@@ -276,6 +264,33 @@ $card-h: 380px;
     font-weight: 600;
     color: rgba(255, 255, 255, 0.4);
   }
+
+  &__text {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.4);
+    margin: 0;
+  }
+}
+
+@keyframes role-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ===== Waiting ===== */
+.role-waiting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 0;
+  animation: role-fade-up 0.5s ease;
 
   &__text {
     font-size: 14px;

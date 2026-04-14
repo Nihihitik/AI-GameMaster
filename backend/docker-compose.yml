@@ -1,70 +1,51 @@
+name: gamemaster-backend
+
 services:
-  # Сервис базы данных PostgreSQL
   db:
     image: postgres:16-alpine
+    container_name: gamemaster-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+    # Хост-порт 5433, чтобы не конфликтовать с локальным postgres на 5432
     ports:
-      - "5432:5432"
-    # Том для сохранения данных БД между перезапусками
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # Проверка готовности БД перед запуском зависимых сервисов
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # Сервис backend-приложения (FastAPI)
   backend:
-    build: .
+    build:
+      context: .
+      # BuildKit нужен для cache-mount'ов в Dockerfile
+      dockerfile: Dockerfile
+    container_name: gamemaster-backend
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      # Переопределяем DATABASE_URL для Docker-сети (хост db вместо localhost)
+      # Хост db вместо localhost — внутренняя docker-сеть
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # CORS: докер-фронт (3001), локальный CRA (3000), Vite (5173)
+      CORS_ORIGINS: http://localhost:3000,http://localhost:5173
     ports:
       - "8000:8000"
-    # Монтируем исходный код для горячей перезагрузки
+    # Bind-mount для горячей перезагрузки uvicorn --reload
     volumes:
       - .:/app
-    # Запуск только после готовности БД
+    # Применяем миграции перед стартом — иначе recovery_loop падает на отсутствующих таблицах
+    command: >
+      sh -c "uv run alembic upgrade head &&
+             uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:
       db:
         condition: service_healthy
 
-  # Сервис frontend-приложения (Create React App dev-server)
-  frontend:
-    build:
-      context: ../frontend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      # REACT_APP_* читаются из окружения при старте CRA dev-server.
-      # Браузер ходит с хоста, поэтому используем localhost, а не docker-hostname.
-      REACT_APP_API_BASE_URL: http://localhost:8000
-      REACT_APP_WS_BASE_URL: ws://localhost:8000
-      REACT_APP_USE_MOCKS: "false"
-      # Polling watcher — hot reload изнутри контейнера с bind-mount.
-      CHOKIDAR_USEPOLLING: "true"
-      WATCHPACK_POLLING: "true"
-    ports:
-      - "3000:3000"
-    # Bind-mount для горячей перезагрузки; анонимный volume на node_modules,
-    # чтобы установленные в образе зависимости не затирались хостовыми.
-    volumes:
-      - ../frontend:/app
-      - /app/node_modules
-    depends_on:
-      - backend
-    stdin_open: true
-    tty: true
-
-# Именованный том для хранения данных PostgreSQL
 volumes:
   postgres_data:
