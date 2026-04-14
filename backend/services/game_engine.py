@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import random
 import uuid
 from datetime import datetime, timezone
@@ -36,12 +37,15 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _announcement(trigger: str) -> dict:
+def _announcement(trigger: str, seed_salt: str = "") -> dict:
     """Триггер для локальной озвучки на клиенте.
 
-    Клиент по trigger выбирает одну из заранее заготовленных фраз.
+    Клиент по trigger + seed выбирает одну из заранее заготовленных фраз.
+    seed is deterministic (same for all clients) so everyone hears the same text.
     """
-    return {"trigger": trigger}
+    raw = f"{trigger}:{seed_salt}:{_now().isoformat()}"
+    seed = int(hashlib.md5(raw.encode()).hexdigest()[:8], 16)
+    return {"trigger": trigger, "seed": seed}
 
 
 async def _persist_phase_changed(
@@ -173,6 +177,10 @@ async def start_game(db: AsyncSession, session: Session) -> None:
     await db.commit()
 
     timer_seconds = int((session.settings or {}).get("role_reveal_timer_seconds") or 15)
+    rt = runtime_state.get(session.id)
+    rt.timer_name = "role_reveal"
+    rt.timer_seconds = timer_seconds
+    rt.timer_started_at = phase.started_at
     await ws_manager.send_to_session(
         session.id,
         {
@@ -181,7 +189,6 @@ async def start_game(db: AsyncSession, session: Session) -> None:
                 "phase": {"type": "role_reveal", "number": 0},
                 "timer_seconds": timer_seconds,
                 "started_at": phase.started_at.isoformat(),
-                "announcement": _announcement("game_started"),
             },
         },
     )
@@ -282,6 +289,10 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
 async def transition_to_night(session_id: uuid.UUID, phase_number: int):
     from core.database import async_session_factory
 
+    rt = runtime_state.get(session_id)
+    if rt.game_paused:
+        return
+
     async with async_session_factory() as db:
         session = await db.get(Session, session_id)
         if not session or session.status != "active":
@@ -308,6 +319,68 @@ async def transition_to_night(session_id: uuid.UUID, phase_number: int):
         rt.mafia_choice_by = None
         rt.maniac_choice_target = None
 
+        # ── Pre-night narrator sequence ─────────────────────────────────
+        # Night 1: rules intro → "all acknowledged" → night start poem.
+        # Night 2+: only "night start" phrase.
+        if phase_number == 1:
+            # 1) Rules intro
+            rules_ann = _announcement("game_started", str(session_id))
+            await ws_manager.send_to_session(
+                session_id,
+                {
+                    "type": "phase_changed",
+                    "payload": {
+                        "phase": {"type": "night", "number": phase_number},
+                        "sub_phase": None,
+                        "timer_seconds": None,
+                        "timer_started_at": None,
+                        "announcement": rules_ann,
+                    },
+                },
+            )
+            await asyncio.sleep(6)
+            if rt.game_paused:
+                return
+
+            # 2) "All acknowledged / starting game"
+            ack_ann = _announcement("all_acknowledged", str(session_id))
+            await ws_manager.send_to_session(
+                session_id,
+                {
+                    "type": "phase_changed",
+                    "payload": {
+                        "phase": {"type": "night", "number": phase_number},
+                        "sub_phase": None,
+                        "timer_seconds": None,
+                        "timer_started_at": None,
+                        "announcement": ack_ann,
+                    },
+                },
+            )
+            await asyncio.sleep(5)
+            if rt.game_paused:
+                return
+
+        # 3) Night start phrase
+        night_start_ann = _announcement("night_start", str(session_id))
+        await ws_manager.send_to_session(
+            session_id,
+            {
+                "type": "phase_changed",
+                "payload": {
+                    "phase": {"type": "night", "number": phase_number},
+                    "sub_phase": None,
+                    "timer_seconds": None,
+                    "timer_started_at": None,
+                    "announcement": night_start_ann,
+                },
+            },
+        )
+        await asyncio.sleep(5)
+        if rt.game_paused:
+            return
+
+        # ── Create night phase in DB ──────────────────────────────────
         phase = GamePhase(
             id=uuid.uuid4(),
             session_id=session_id,
@@ -318,7 +391,6 @@ async def transition_to_night(session_id: uuid.UUID, phase_number: int):
         )
         db.add(phase)
         try:
-            # Персистим смену фазы ночи (базовый вход в ночь).
             await _persist_phase_changed(
                 db,
                 session_id,
@@ -329,27 +401,13 @@ async def transition_to_night(session_id: uuid.UUID, phase_number: int):
                     "night_turn": "lover",
                     "timer_seconds": int((session.settings or {}).get("night_action_timer_seconds") or 30),
                     "timer_started_at": _now().isoformat(),
-                    "announcement": _announcement("night_start"),
+                    "announcement": night_start_ann,
                     "blocked_tonight": [],
                 },
             )
         except IntegrityError:
             await db.rollback()
             return
-
-        await ws_manager.send_to_session(
-            session_id,
-            {
-                "type": "phase_changed",
-                "payload": {
-                    "phase": {"type": "night", "number": phase_number},
-                    "sub_phase": None,
-                    "timer_seconds": None,
-                    "timer_started_at": None,
-                    "announcement": _announcement("night_start"),
-                },
-            },
-        )
 
         # Запускаем последовательность ходов ночи:
         # lover -> mafia -> don -> sheriff -> doctor -> maniac
@@ -398,13 +456,63 @@ async def execute_night_sequence(
 
     async def _run_turn(turn_slug: str, seconds_for_turn: int) -> str | None:
         """Возвращает \"paused\" | \"aborted\" или None если ход завершён штатно."""
+
+        # ── 1. Pre-check: does this role have living actors? ──────────
+        #    If not, skip entirely (no broadcast, no timer).
+        if turn_slug == "mafia":
+            already_kill = await db.scalar(
+                select(NightAction.id).where(
+                    NightAction.phase_id == phase.id,
+                    NightAction.action_type == "kill",
+                )
+            )
+            if already_kill is not None:
+                return None
+            mafia_actors = [
+                p for p in alive
+                if role_slug(p) == "mafia" and p.id not in rt.blocked_tonight
+            ]
+            if not mafia_actors:
+                return None
+        else:
+            solo_actors = [p for p in alive if role_slug(p) == turn_slug]
+            if not solo_actors:
+                return None
+            solo_actor = solo_actors[0]
+            # Если актёр заблокирован любовницей — пропускаем ход (no-op).
+            if solo_actor.id in rt.blocked_tonight:
+                await ws_manager.send_to_user(
+                    session.id,
+                    solo_actor.user_id,
+                    {
+                        "type": "action_blocked",
+                        "payload": {
+                            "action_type": (
+                                (role_by_id.get(solo_actor.role_id).abilities or {}).get("night_action")
+                                if solo_actor.role_id else None
+                            ),
+                            "reason": "lover_block",
+                        },
+                    },
+                )
+                return None
+            already = await db.scalar(
+                select(NightAction.id).where(
+                    NightAction.phase_id == phase.id,
+                    NightAction.actor_player_id == solo_actor.id,
+                )
+            )
+            if already is not None:
+                return None
+
+        # ── 2. Actors exist → set runtime & persist ──────────────────
         rt.night_turn = turn_slug
         rt.timer_name = f"night_{turn_slug}"
         rt.timer_seconds = seconds_for_turn
         rt.timer_started_at = _now()
         rt.night_action_event.clear()
 
-        # Персистим текущий ночной ход (чтобы можно было восстановиться после рестарта).
+        turn_announcement = _announcement(f"{turn_slug}_turn", str(session.id))
         await _persist_phase_changed(
             db,
             session.id,
@@ -415,27 +523,29 @@ async def execute_night_sequence(
                 "night_turn": turn_slug,
                 "timer_seconds": seconds_for_turn,
                 "timer_started_at": rt.timer_started_at.isoformat(),
-                "announcement": _announcement(f"{turn_slug}_turn"),
-                # Полезно для восстановления: какие игроки заблокированы этой ночью.
+                "announcement": turn_announcement,
                 "blocked_tonight": [str(x) for x in rt.blocked_tonight],
             },
         )
 
+        # ── 3. Broadcast turn announcement to ALL players ─────────────
+        await ws_manager.send_to_session(
+            session.id,
+            {
+                "type": "phase_changed",
+                "payload": {
+                    "phase": {"type": "night", "number": phase.phase_number},
+                    "sub_phase": None,
+                    "night_turn": turn_slug,
+                    "timer_seconds": seconds_for_turn,
+                    "timer_started_at": rt.timer_started_at.isoformat(),
+                    "announcement": turn_announcement,
+                },
+            },
+        )
+
+        # ── 4. Send action_required to the specific actor(s) ─────────
         if turn_slug == "mafia":
-            already_kill = await db.scalar(
-                select(NightAction.id).where(
-                    NightAction.phase_id == phase.id,
-                    NightAction.action_type == "kill",
-                )
-            )
-            if already_kill is not None:
-                return None
-            # Активные стрелки мафии: "обычная" мафия, не заблокированная любовницей.
-            actors = [
-                p for p in alive
-                if role_slug(p) == "mafia" and p.id not in rt.blocked_tonight
-            ]
-            # Доступные цели — живые не из мафии (мафия и дон — одна команда, не стреляем по своим).
             def _is_non_mafia(pl: Player) -> bool:
                 if not pl.role_id:
                     return True
@@ -447,9 +557,7 @@ async def execute_night_sequence(
                 for p in alive
                 if _is_non_mafia(p)
             ]
-            if not actors:
-                return None
-            for a in actors:
+            for a in mafia_actors:
                 await ws_manager.send_to_user(
                     session.id,
                     a.user_id,
@@ -460,47 +568,14 @@ async def execute_night_sequence(
                             "available_targets": available_targets,
                             "timer_seconds": seconds_for_turn,
                             "timer_started_at": rt.timer_started_at.isoformat(),
-                            "announcement": _announcement("mafia_turn"),
                         },
                     },
                 )
         else:
-            # Одиночные ходы: lover, don, sheriff, doctor, maniac.
-            actors = [p for p in alive if role_slug(p) == turn_slug]
-            if not actors:
-                return None
-            actor = actors[0]
-
-            # Если актёр заблокирован любовницей — пропускаем ход (no-op).
-            if actor.id in rt.blocked_tonight:
-                await ws_manager.send_to_user(
-                    session.id,
-                    actor.user_id,
-                    {
-                        "type": "action_blocked",
-                        "payload": {
-                            "action_type": (
-                                (role_by_id.get(actor.role_id).abilities or {}).get("night_action")
-                                if actor.role_id else None
-                            ),
-                            "reason": "lover_block",
-                        },
-                    },
-                )
-                return None
-
-            already = await db.scalar(
-                select(NightAction.id).where(
-                    NightAction.phase_id == phase.id,
-                    NightAction.actor_player_id == actor.id,
-                )
-            )
-            if already is not None:
-                return None
+            actor = solo_actor
 
             if turn_slug == "lover":
                 action_type = "lover_visit"
-                # Нельзя посещать себя; нельзя повторять цель подряд.
                 available_targets = [
                     {"player_id": str(p.id), "name": p.name}
                     for p in alive
@@ -517,7 +592,6 @@ async def execute_night_sequence(
                     r = role_by_id.get(pl.role_id)
                     return r is None or r.team != "mafia"
 
-                # Дон не может проверять себя и мафию/дона.
                 available_targets = [
                     {"player_id": str(p.id), "name": p.name}
                     for p in alive
@@ -532,7 +606,33 @@ async def execute_night_sequence(
                 ]
             elif turn_slug == "doctor":
                 action_type = "heal"
-                available_targets = [{"player_id": str(p.id), "name": p.name} for p in alive]
+                prev_phase = await db.scalar(
+                    select(GamePhase).where(
+                        GamePhase.session_id == session.id,
+                        GamePhase.phase_type == "night",
+                        GamePhase.phase_number == phase.phase_number - 1,
+                    ).limit(1)
+                )
+                prev_heal_target_id: uuid.UUID | None = None
+                if prev_phase is not None:
+                    prev_heal_target_id = await db.scalar(
+                        select(NightAction.target_player_id).where(
+                            NightAction.phase_id == prev_phase.id,
+                            NightAction.actor_player_id == actor.id,
+                            NightAction.action_type == "heal",
+                        )
+                    )
+                heal_restriction = None
+                if prev_heal_target_id is not None:
+                    restricted_p = next((p for p in alive if p.id == prev_heal_target_id), None)
+                    if restricted_p:
+                        heal_restriction = {"player_id": str(restricted_p.id), "name": restricted_p.name,
+                                            "reason": "Нельзя лечить одного и того же два раунда подряд"}
+                available_targets = [
+                    {"player_id": str(p.id), "name": p.name}
+                    for p in alive
+                    if p.id != prev_heal_target_id
+                ]
             elif turn_slug == "maniac":
                 action_type = "maniac_kill"
                 available_targets = [
@@ -543,19 +643,18 @@ async def execute_night_sequence(
             else:
                 return None
 
+            action_payload: dict = {
+                "action_type": action_type,
+                "available_targets": available_targets,
+                "timer_seconds": seconds_for_turn,
+                "timer_started_at": rt.timer_started_at.isoformat(),
+            }
+            if turn_slug == "doctor" and heal_restriction:
+                action_payload["heal_restriction"] = heal_restriction
             await ws_manager.send_to_user(
                 session.id,
                 actor.user_id,
-                {
-                    "type": "action_required",
-                    "payload": {
-                        "action_type": action_type,
-                        "available_targets": available_targets,
-                        "timer_seconds": seconds_for_turn,
-                        "timer_started_at": rt.timer_started_at.isoformat(),
-                        "announcement": _announcement(f"{turn_slug}_turn"),
-                    },
-                },
+                {"type": "action_required", "payload": action_payload},
             )
 
         async def _timeout():
@@ -572,6 +671,32 @@ async def execute_night_sequence(
             return "aborted"
         if rt.game_paused:
             return "paused"
+
+        # ── 5. Post-action: give time for check results, then closing phrase ──
+        # Brief pause so sheriff/don can see their check result before screen changes.
+        await asyncio.sleep(5)
+        if rt.game_paused:
+            return "paused"
+
+        # Broadcast closing announcement to ALL players.
+        closing = _announcement(f"{turn_slug}_turn_end", str(session.id))
+        await ws_manager.send_to_session(
+            session.id,
+            {
+                "type": "phase_changed",
+                "payload": {
+                    "phase": {"type": "night", "number": phase.phase_number},
+                    "sub_phase": None,
+                    "night_turn": turn_slug,
+                    "announcement": closing,
+                },
+            },
+        )
+        # Wait for clients to display the closing narrator before next turn.
+        await asyncio.sleep(4)
+        if rt.game_paused:
+            return "paused"
+
         return None
 
     order = ["lover", "mafia", "don", "sheriff", "doctor", "maniac"]
@@ -702,7 +827,7 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
 
     await ws_manager.send_to_session(
         session.id,
-        {"type": "night_result", "payload": {**payload, "announcement": _announcement("night_result")}},
+        {"type": "night_result", "payload": {**payload, "announcement": _announcement("night_result", str(session.id))}},
     )
     for dp in died_players:
         await ws_manager.send_to_session(
@@ -724,6 +849,10 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
 
 async def transition_to_day(session_id: uuid.UUID, phase_number: int):
     from core.database import async_session_factory
+
+    rt = runtime_state.get(session_id)
+    if rt.game_paused:
+        return
 
     async with async_session_factory() as db:
         session = await db.get(Session, session_id)
@@ -751,6 +880,7 @@ async def transition_to_day(session_id: uuid.UUID, phase_number: int):
             ended_at=None,
         )
         db.add(phase)
+        disc_ann = _announcement("day_discussion_start", str(session_id))
         try:
             await _persist_phase_changed(
                 db,
@@ -762,7 +892,7 @@ async def transition_to_day(session_id: uuid.UUID, phase_number: int):
                     "night_turn": None,
                     "timer_seconds": int((session.settings or {}).get("discussion_timer_seconds") or 120),
                     "timer_started_at": _now().isoformat(),
-                    "announcement": _announcement("day_discussion_start"),
+                    "announcement": disc_ann,
                 },
             )
         except IntegrityError:
@@ -786,7 +916,7 @@ async def transition_to_day(session_id: uuid.UUID, phase_number: int):
                     "sub_phase": "discussion",
                     "timer_seconds": discussion_seconds,
                     "timer_started_at": rt.timer_started_at.isoformat(),
-                    "announcement": _announcement("day_discussion_start"),
+                    "announcement": disc_ann,
                 },
             },
         )
@@ -799,6 +929,10 @@ async def transition_to_day(session_id: uuid.UUID, phase_number: int):
 
 async def transition_to_voting(session_id: uuid.UUID):
     from core.database import async_session_factory
+
+    rt = runtime_state.get(session_id)
+    if rt.game_paused:
+        return
 
     async with async_session_factory() as db:
         session = await db.get(Session, session_id)
@@ -816,6 +950,7 @@ async def transition_to_voting(session_id: uuid.UUID):
         rt.timer_seconds = voting_seconds
         rt.timer_started_at = _now()
 
+        vote_ann = _announcement("day_voting_start", str(session_id))
         # Персистим смену подфазы -> voting
         await _persist_phase_changed(
             db,
@@ -827,23 +962,43 @@ async def transition_to_voting(session_id: uuid.UUID):
                 "night_turn": None,
                 "timer_seconds": voting_seconds,
                 "timer_started_at": rt.timer_started_at.isoformat(),
-                "announcement": _announcement("day_voting_start"),
+                "announcement": vote_ann,
             },
         )
 
-        await ws_manager.send_to_session(
-            session_id,
-            {
-                "type": "phase_changed",
-                "payload": {
-                    "phase": {"type": "day", "number": phase.phase_number},
-                    "sub_phase": "voting",
-                    "timer_seconds": voting_seconds,
-                    "timer_started_at": rt.timer_started_at.isoformat(),
-                    "announcement": _announcement("day_voting_start"),
+        # Рассылаем phase_changed каждому игроку персонально, включая available_targets
+        # (список живых, кроме себя и заблокированного), чтобы фронт мог отрисовать голосование
+        # без дополнительного GET /state.
+        players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
+        alive = [p for p in players if p.status == "alive"]
+        for p in players:
+            is_alive = p.status == "alive"
+            is_blocked = rt.day_blocked_player is not None and p.id == rt.day_blocked_player
+            targets = (
+                [
+                    {"player_id": str(t.id), "name": t.name}
+                    for t in alive
+                    if t.id != p.id
+                ]
+                if is_alive and not is_blocked
+                else []
+            )
+            await ws_manager.send_to_user(
+                session_id,
+                p.user_id,
+                {
+                    "type": "phase_changed",
+                    "payload": {
+                        "phase": {"type": "day", "number": phase.phase_number},
+                        "sub_phase": "voting",
+                        "timer_seconds": voting_seconds,
+                        "timer_started_at": rt.timer_started_at.isoformat(),
+                        "announcement": vote_ann,
+                        "awaiting_action": is_alive and not is_blocked,
+                        "available_targets": targets,
+                    },
                 },
-            },
-        )
+            )
 
         async def _resolve():
             await resolve_votes(session_id)
@@ -853,6 +1008,10 @@ async def transition_to_voting(session_id: uuid.UUID):
 
 async def resolve_votes(session_id: uuid.UUID):
     from core.database import async_session_factory
+
+    rt_check = runtime_state.get(session_id)
+    if rt_check.game_paused:
+        return
 
     async with async_session_factory() as db:
         session = await db.get(Session, session_id)
@@ -914,7 +1073,7 @@ async def resolve_votes(session_id: uuid.UUID):
                         else None
                     ),
                     "votes": all_votes,
-                    "announcement": _announcement("vote_result"),
+                    "announcement": _announcement("vote_result", str(session.id)),
                 },
             },
         )
@@ -1000,9 +1159,10 @@ async def apply_host_kick(db: AsyncSession, session: Session, kicked: Player) ->
 
     if phase and phase.phase_type == "day" and rt.day_sub_phase == "voting":
         votes_cast = await db.scalar(select(func.count(DayVote.id)).where(DayVote.phase_id == phase.id))
-        alive_cnt = await db.scalar(
-            select(func.count(Player.id)).where(Player.session_id == session.id, Player.status == "alive")
-        )
+        eligible_q = select(func.count(Player.id)).where(Player.session_id == session.id, Player.status == "alive")
+        if rt.day_blocked_player is not None:
+            eligible_q = eligible_q.where(Player.id != rt.day_blocked_player)
+        alive_cnt = await db.scalar(eligible_q)
         if int(votes_cast or 0) >= int(alive_cnt or 0) and int(alive_cnt or 0) > 0:
             await timer_service.cancel_timer(session.id, "voting")
             await resolve_votes(session.id)
@@ -1048,7 +1208,7 @@ async def finish_game(db: AsyncSession, session: Session, winner: str) -> None:
         session.id,
         {
             "type": "game_finished",
-            "payload": {"winner": winner, "players": payload_players, "announcement": _announcement("game_finished")},
+            "payload": {"winner": winner, "players": payload_players, "announcement": _announcement("game_finished", str(session.id))},
         },
     )
     await timer_service.cancel_all(session.id)

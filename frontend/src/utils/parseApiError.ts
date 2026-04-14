@@ -23,5 +23,5 @@ export function parseApiError(err: unknown): ParsedApiError {
       httpStatus: err.response.status,
     };
   }
-  return { code: 'internal_error', message: 'Нет связи с сервером', httpStatus: 0 };
+  return { code: 'network_error', message: 'Нет связи с сервером', httpStatus: 0 };
 }

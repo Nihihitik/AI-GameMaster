@@ -84,7 +84,7 @@ async def create_session(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> SessionResponse:
-    if payload.player_count > 5 and not await _has_pro(db, current_user.id):
+    if payload.player_count > 12 and not await _has_pro(db, current_user.id):
         raise GameError(403, "pro_required", "Для этого количества игроков нужна подписка Pro")
 
     role_cfg = payload.settings.role_config.model_dump()

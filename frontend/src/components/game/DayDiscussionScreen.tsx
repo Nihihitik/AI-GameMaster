@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import PauseButton from './PauseButton';
 import './DayDiscussionScreen.scss';
 
 /**
@@ -28,6 +29,7 @@ export default function DayDiscussionScreen() {
   const myStatus = useGameStore((s) => s.myStatus);
   const phase = useGameStore((s) => s.phase);
   const discussionTimer = useSessionStore((s) => s.settings.discussion_timer_seconds);
+  const timerPaused = useSessionStore((s) => s.timerPaused);
 
   const [timeLeft, setTimeLeft] = useState(discussionTimer);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -42,7 +44,7 @@ export default function DayDiscussionScreen() {
   }, [phase?.id, phase?.timer_seconds, phase?.timer_started_at, discussionTimer]);
 
   useEffect(() => {
-    if (timeLeft <= 0) {
+    if (timeLeft <= 0 || timerPaused) {
       if (intervalRef.current) clearInterval(intervalRef.current);
       return;
     }
@@ -50,7 +52,7 @@ export default function DayDiscussionScreen() {
       setTimeLeft((t) => (t <= 1 ? 0 : t - 1));
     }, 1000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [timeLeft]);
+  }, [timeLeft, timerPaused]);
 
   const formatTime = (s: number) => {
     const m = Math.floor(s / 60);
@@ -66,6 +68,7 @@ export default function DayDiscussionScreen() {
       <div className="day-discussion__ambient" />
 
       <header className="day-discussion__header">
+        <PauseButton />
         <h2 className="day-discussion__title">Обсуждение</h2>
         <div className={`day-discussion__timer ${timeLeft <= 10 ? 'day-discussion__timer--danger' : ''}`}>
           {formatTime(timeLeft)}

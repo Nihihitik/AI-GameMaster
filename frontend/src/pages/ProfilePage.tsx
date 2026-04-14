@@ -122,11 +122,12 @@ export default function ProfilePage() {
     setNicknameError('');
     try {
       const { data } = await authApi.updateNickname({ nickname: trimmed });
-      setUser(data);
+      const me = await authApi.me();
+      useAuthStore.getState().setUser(me.data);
       setIsEditingNickname(false);
-    } catch (err) {
+    } catch (err: any) {
       const parsed = parseApiError(err);
-      setNicknameError(ERROR_MESSAGES[parsed.code] || parsed.message);
+      setNicknameError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
     } finally {
       setNicknameSaving(false);
     }

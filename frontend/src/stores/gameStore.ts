@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { Role, Player, Target, Announcement, VoteInfo, GameResult, Phase } from '../types/game';
 import type { GameStateResponse, NightActionCheckResult } from '../types/api';
 import { gameApi } from '../api/gameApi';
+import { getNarratorTexts, NarratorContext } from '../utils/narratorPhrases';
+import { useSessionStore } from './sessionStore';
 
 export type GameScreen =
   | 'role_reveal'
@@ -69,6 +71,7 @@ interface GameState {
   selectedTarget: string | null;
   actionSubmitted: boolean;
   checkResults: CheckResultEntry[];
+  healRestriction: { player_id: string; name: string; reason: string } | null;
 
   // Night result tracking
   nightKills: NightKill[];
@@ -156,6 +159,28 @@ function actionLabelFor(type: NightActionType | null): string {
   }
 }
 
+/**
+ * Build NarratorContext from store state + incoming payload.
+ */
+function buildNarratorCtx(state: any, payload?: any): NarratorContext {
+  const settings = useSessionStore.getState()?.settings ?? {};
+  return {
+    activeRoles: (settings?.role_config ?? {}) as unknown as Record<string, number>,
+    died: payload?.died ?? state.nightResultDied ?? undefined,
+    eliminated: payload?.eliminated ?? undefined,
+    winner: payload?.winner ?? undefined,
+    phaseNumber: payload?.phase?.number ?? state.phase?.number ?? 1,
+    nightTurn: payload?.night_turn ?? state.phase?.night_turn ?? undefined,
+    dayBlockedPlayerName: (() => {
+      const bpId = state.dayBlockedPlayer;
+      if (!bpId) return undefined;
+      const p = state.players?.find((pl: any) => pl.id === bpId);
+      return p?.name;
+    })(),
+    seed: payload?.announcement?.seed,
+  };
+}
+
 const initialState = {
   screen: 'role_reveal' as GameScreen,
   sessionId: null,
@@ -181,6 +206,7 @@ const initialState = {
   selectedTarget: null,
   actionSubmitted: false,
   checkResults: [],
+  healRestriction: null,
   nightKills: [],
   nightResultDied: null,
   nightResultText: '',
@@ -210,10 +236,29 @@ export const useGameStore = create<GameState>((set, get) => ({
     const myPlayer = data.my_player;
     const actionType = (data.action_type as NightActionType | null) ?? null;
 
+    // Sync pause state and settings from backend into sessionStore.
+    if ((data as any).game_paused != null) {
+      useSessionStore.setState({ timerPaused: !!(data as any).game_paused });
+    }
+    // Hydrate session settings so timer fallback values are correct after refresh.
+    if ((data as any).settings && typeof (data as any).settings === 'object') {
+      const incoming = (data as any).settings;
+      useSessionStore.setState((prev) => ({
+        settings: { ...prev.settings, ...incoming, role_config: { ...prev.settings.role_config, ...(incoming.role_config || {}) } },
+      }));
+    }
+
+    // If narrator is currently active (e.g. pre-night sequence), preserve it.
+    const cur = get();
+    const narratorActive = cur.screen === 'narrator' && cur.narratorTexts.length > 0;
+
     set({
       sessionId,
       phase,
-      screen,
+      screen: narratorActive ? 'narrator' : screen,
+      pendingScreen: narratorActive ? (cur.pendingScreen ?? screen) : cur.pendingScreen,
+      narratorTexts: narratorActive ? cur.narratorTexts : cur.narratorTexts,
+      narratorIndex: narratorActive ? cur.narratorIndex : cur.narratorIndex,
       myPlayerId: myPlayer?.id ?? null,
       myRole: myPlayer?.role ?? null,
       myStatus: myPlayer?.status ?? 'alive',
@@ -227,6 +272,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       actionLabel: actionLabelFor(actionType),
       availableTargets: data.available_targets ?? [],
       actionSubmitted: data.my_action_submitted || get().actionSubmitted,
+      voteSubmitted: (data as any).my_vote_submitted || get().voteSubmitted,
       votes: data.votes ?? null,
       dayBlockedPlayer: data.day_blocked_player ?? null,
       // Не затираем финальный result при re-sync: /state не возвращает
@@ -267,11 +313,19 @@ export const useGameStore = create<GameState>((set, get) => ({
     const state = get();
     if (!state.sessionId) return;
     try {
-      await gameApi.acknowledgeRole(state.sessionId);
+      const res = await gameApi.acknowledgeRole(state.sessionId);
+      const body = res?.data ?? res;
+      const acked = (body as any)?.players_acknowledged;
+      const total = (body as any)?.players_total;
+      set({
+        acknowledged: true,
+        ...(acked != null ? { acknowledgedCount: Number(acked) } : {}),
+        ...(total != null ? { totalPlayers: Number(total) } : {}),
+      });
     } catch {
       // Swallow — the local ack flag still flips so the user is not stuck.
+      set({ acknowledged: true });
     }
-    set({ acknowledged: true });
   },
 
   setScreen: (screen) => set({ screen }),
@@ -294,8 +348,21 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   // --- WebSocket hooks -------------------------------------------------------
 
-  onGameStarted: (_payload) => {
+  onGameStarted: (payload) => {
+    // Build phase from the game_started payload so timer_seconds is correct.
+    const rawPhase = payload?.phase;
+    const phase: Phase | null = rawPhase
+      ? {
+          ...rawPhase,
+          sub_phase: rawPhase.sub_phase ?? null,
+          timer_seconds: payload?.timer_seconds ?? rawPhase.timer_seconds ?? null,
+          timer_started_at: payload?.started_at ?? rawPhase.timer_started_at ?? null,
+        }
+      : null;
+    // Go straight to role_reveal — players read their cards first.
+    // Rules narrator plays AFTER all acknowledge (via transition_to_night).
     set({
+      phase,
       screen: 'role_reveal',
       acknowledged: false,
       acknowledgedCount: 0,
@@ -309,7 +376,15 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   applyPhase: (payload) => {
-    const phase: Phase = payload?.phase ?? payload;
+    const rawPhase = payload?.phase ?? payload;
+    // Merge top-level timer/sub_phase fields into the phase object so that
+    // screens can read phase.timer_seconds / phase.timer_started_at directly.
+    const phase: Phase = {
+      ...rawPhase,
+      sub_phase: payload?.sub_phase ?? rawPhase?.sub_phase ?? null,
+      timer_seconds: payload?.timer_seconds ?? rawPhase?.timer_seconds ?? null,
+      timer_started_at: payload?.timer_started_at ?? rawPhase?.timer_started_at ?? null,
+    };
     const sessionStatus = payload?.session_status;
     const hasActionData = payload && 'awaiting_action' in payload;
     const incomingAwaiting: boolean = payload?.awaiting_action ?? false;
@@ -346,16 +421,51 @@ export const useGameStore = create<GameState>((set, get) => ({
       const actionSubmitted = preserveAction ? state.actionSubmitted : false;
       const selectedTarget = preserveAction ? state.selectedTarget : null;
 
-      const screen = deriveScreen(
+      let screen = deriveScreen(
         phase?.type,
         phase?.sub_phase,
         awaitingAction,
         sessionStatus,
       );
 
+      // Narrator: if announcement trigger has texts, show narrator first.
+      const trigger = payload?.announcement?.trigger;
+      const ctx = buildNarratorCtx(state, payload);
+      const newNarratorTexts = getNarratorTexts(trigger, ctx);
+      let pendingScreen: GameScreen | null = state.pendingScreen;
+      let narratorTexts = state.narratorTexts;
+      let narratorIndex = state.narratorIndex;
+
+      const narratorIsPlaying = state.screen === 'narrator' && state.narratorTexts.length > 0;
+
+      if (newNarratorTexts.length > 0 && screen !== 'finale') {
+        pendingScreen = screen;
+        if (narratorIsPlaying) {
+          // Chain: append new texts to the remaining ones so current narration
+          // isn't interrupted (e.g. night_result followed by day_discussion_start).
+          const remaining = state.narratorTexts.slice(state.narratorIndex);
+          narratorTexts = [...remaining, ...newNarratorTexts];
+          narratorIndex = 0;
+        } else {
+          narratorTexts = newNarratorTexts;
+          narratorIndex = 0;
+        }
+        screen = 'narrator';
+      } else if (narratorIsPlaying) {
+        // Narrator is currently playing; don't replace it — just update pendingScreen.
+        pendingScreen = screen;
+        screen = 'narrator';
+      } else {
+        narratorTexts = [];
+        narratorIndex = 0;
+      }
+
       return {
         phase,
         screen,
+        pendingScreen,
+        narratorTexts,
+        narratorIndex,
         awaitingAction,
         actionType,
         actionLabel: actionLabelFor(actionType),
@@ -377,8 +487,18 @@ export const useGameStore = create<GameState>((set, get) => ({
   applyActionRequired: (payload) => {
     const actionType: NightActionType | null = payload?.action_type ?? null;
     const availableTargets: Target[] = payload?.available_targets ?? [];
+    const healRestriction = payload?.heal_restriction ?? null;
     set((state) => {
       if (state.screen === 'finale' || state.result) return state;
+
+      const targetScreen: GameScreen = state.phase?.type === 'night' ? 'night_action' : state.screen;
+
+      // If narrator is currently playing (from the broadcast phase_changed),
+      // don't interrupt it — just update pendingScreen to the action screen.
+      const narratorIsPlaying = state.screen === 'narrator' && state.narratorTexts.length > 0;
+      const screen: GameScreen = narratorIsPlaying ? 'narrator' : targetScreen;
+      const pendingScreen = narratorIsPlaying ? targetScreen : state.pendingScreen;
+
       return {
         awaitingAction: true,
         actionType,
@@ -386,7 +506,9 @@ export const useGameStore = create<GameState>((set, get) => ({
         availableTargets,
         selectedTarget: null,
         actionSubmitted: false,
-        screen: state.phase?.type === 'night' ? 'night_action' : state.screen,
+        healRestriction,
+        screen,
+        pendingScreen,
       };
     });
   },
@@ -445,22 +567,51 @@ export const useGameStore = create<GameState>((set, get) => ({
   applyNightResult: (payload) => {
     const died: { player_id: string; name: string }[] = payload?.died ?? [];
     const killedNames = died.map((d) => d.name).join(', ');
-    set((state) => ({
-      nightKills: died.map((d) => ({ player_id: d.player_id, name: d.name })),
-      nightResultDied: died,
-      nightResultText: killedNames,
-      dayBlockedPlayer: payload?.day_blocked_player ?? null,
-      // Apply dead status update to players list.
-      players: state.players.map((p) =>
-        died.some((d) => d.player_id === p.id) ? { ...p, status: 'dead' as const } : p
-      ),
-      myStatus: died.some((d) => d.player_id === state.myPlayerId) ? 'dead' : state.myStatus,
-    }));
+
+    const trigger = payload?.announcement?.trigger;
+    const state = get();
+    // Resolve blocked player name for narrator context.
+    const bpId = payload?.day_blocked_player ?? null;
+    const bpName = bpId ? state.players.find((p) => p.id === bpId)?.name : undefined;
+    const ctx: NarratorContext = {
+      ...buildNarratorCtx(state, payload),
+      died,
+      dayBlockedPlayerName: bpName,
+    };
+    const narratorTexts = getNarratorTexts(trigger, ctx);
+
+    set((s) => {
+      const base = {
+        nightKills: died.map((d) => ({ player_id: d.player_id, name: d.name })),
+        nightResultDied: died,
+        nightResultText: killedNames,
+        dayBlockedPlayer: bpId,
+        players: s.players.map((p) =>
+          died.some((d) => d.player_id === p.id) ? { ...p, status: 'dead' as const } : p
+        ),
+        myStatus: died.some((d) => d.player_id === s.myPlayerId) ? ('dead' as const) : s.myStatus,
+      };
+      if (narratorTexts.length > 0) {
+        // Show narrator; the upcoming phase_changed (day_discussion) will land
+        // while narrator is showing and be queued as pendingScreen already by
+        // applyPhase logic. We just need to set screen to narrator now.
+        return {
+          ...base,
+          screen: 'narrator' as GameScreen,
+          narratorTexts,
+          narratorIndex: 0,
+          pendingScreen: s.pendingScreen,
+        };
+      }
+      return base;
+    });
   },
 
   setVoteCounts: (payload) => {
-    const cast: number = payload?.cast ?? 0;
-    const total: number = payload?.total_expected ?? 0;
+    // Backend vote_update sends votes_cast / votes_total;
+    // /state response sends votes.cast / votes.total_expected.
+    const cast: number = payload?.votes_cast ?? payload?.cast ?? 0;
+    const total: number = payload?.votes_total ?? payload?.total_expected ?? 0;
     const counts: Record<string, number> = payload?.counts ?? {};
     set((state) => ({
       votes: { total_expected: total || state.totalPlayers, cast },
@@ -469,14 +620,32 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   applyVoteResult: (payload) => {
-    const eliminatedId: string | null = payload?.eliminated_player_id ?? null;
-    if (!eliminatedId) return;
-    set((state) => ({
-      players: state.players.map((p) =>
-        p.id === eliminatedId ? { ...p, status: 'dead' as const } : p
-      ),
-      myStatus: state.myPlayerId === eliminatedId ? 'dead' : state.myStatus,
-    }));
+    const eliminated = payload?.eliminated ?? null;
+    const eliminatedId: string | null = eliminated?.player_id ?? payload?.eliminated_player_id ?? null;
+
+    const trigger = payload?.announcement?.trigger;
+    const ctx = buildNarratorCtx(get(), { ...payload, eliminated });
+    const narratorTexts = getNarratorTexts(trigger, ctx);
+
+    set((state) => {
+      const base: any = {};
+      if (eliminatedId) {
+        base.players = state.players.map((p: any) =>
+          p.id === eliminatedId ? { ...p, status: 'dead' as const } : p
+        );
+        base.myStatus = state.myPlayerId === eliminatedId ? 'dead' : state.myStatus;
+      }
+      if (narratorTexts.length > 0) {
+        return {
+          ...base,
+          screen: 'narrator' as GameScreen,
+          narratorTexts,
+          narratorIndex: 0,
+          pendingScreen: state.pendingScreen,
+        };
+      }
+      return base;
+    });
   },
 
   markEliminated: (playerId) => {
@@ -523,7 +692,21 @@ export const useGameStore = create<GameState>((set, get) => ({
       announcement,
       players: roster,
     };
-    set({ result, screen: 'finale' });
+
+    const trigger = payload?.announcement?.trigger;
+    const ctx = buildNarratorCtx(get(), { ...payload, winner });
+    const narratorTexts = getNarratorTexts(trigger, ctx);
+    if (narratorTexts.length > 0) {
+      set({
+        result,
+        screen: 'narrator',
+        pendingScreen: 'finale',
+        narratorTexts,
+        narratorIndex: 0,
+      });
+    } else {
+      set({ result, screen: 'finale' });
+    }
   },
 
   reset: () => set({ ...initialState }),

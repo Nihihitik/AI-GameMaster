@@ -28,4 +28,7 @@ export const gameApi = {
 
   getState: (sessionId: string) =>
     httpClient.get<GameStateResponse>(`/sessions/${sessionId}/state`),
+
+  resetToLobby: (sessionId: string) =>
+    httpClient.post<{ status: string; session_code: string }>(`/sessions/${sessionId}/reset-to-lobby`),
 };

@@ -1,7 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import PauseButton from './PauseButton';
 import './DayVotingScreen.scss';
+
+/**
+ * Compute remaining seconds from phase.timer_seconds + phase.timer_started_at.
+ */
+function computeRemainingSeconds(
+  timerSeconds: number | null | undefined,
+  timerStartedAt: string | null | undefined,
+  fallback: number,
+): number {
+  if (!timerSeconds) return fallback;
+  if (!timerStartedAt) return timerSeconds;
+  const startedMs = Date.parse(timerStartedAt);
+  if (Number.isNaN(startedMs)) return timerSeconds;
+  const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+  return Math.max(0, timerSeconds - elapsed);
+}
 
 export default function DayVotingScreen() {
   const availableTargets = useGameStore((s) => s.availableTargets);
@@ -13,6 +30,7 @@ export default function DayVotingScreen() {
   const submitVote = useGameStore((s) => s.submitVote);
   const phase = useGameStore((s) => s.phase);
   const votingTimer = useSessionStore((s) => s.settings.voting_timer_seconds);
+  const timerPaused = useSessionStore((s) => s.timerPaused);
 
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState(votingTimer);
@@ -22,14 +40,17 @@ export default function DayVotingScreen() {
   const isBlocked = myPlayerId === dayBlockedPlayer;
   const canVote = myStatus === 'alive' && !isBlocked && !voteSubmitted;
 
-  // Pull timer from phase when available, otherwise fall back to settings.
   useEffect(() => {
-    const seconds = phase?.timer_seconds ?? votingTimer;
-    setTimeLeft(seconds);
-  }, [phase?.id, phase?.timer_seconds, votingTimer]);
+    const remaining = computeRemainingSeconds(
+      phase?.timer_seconds,
+      phase?.timer_started_at,
+      votingTimer,
+    );
+    setTimeLeft(remaining);
+  }, [phase?.id, phase?.timer_seconds, phase?.timer_started_at, votingTimer]);
 
   useEffect(() => {
-    if (timeLeft <= 0 || voteSubmitted) {
+    if (timeLeft <= 0 || voteSubmitted || timerPaused) {
       if (intervalRef.current) clearInterval(intervalRef.current);
       return;
     }
@@ -37,7 +58,7 @@ export default function DayVotingScreen() {
       setTimeLeft((t) => (t <= 1 ? 0 : t - 1));
     }, 1000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [timeLeft, voteSubmitted]);
+  }, [timeLeft, voteSubmitted, timerPaused]);
 
   const handleConfirmVote = async () => {
     if (!canVote || !selectedTarget || submitting) return;
@@ -101,6 +122,7 @@ export default function DayVotingScreen() {
       <div className="day-voting__ambient" />
 
       <header className="day-voting__header">
+        <PauseButton />
         <h2 className="day-voting__title">Голосование</h2>
         <div className={`day-voting__timer ${timeLeft <= 10 ? 'day-voting__timer--danger' : ''}`}>
           {formatTime(timeLeft)}

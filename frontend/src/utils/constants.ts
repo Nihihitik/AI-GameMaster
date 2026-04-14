@@ -32,5 +32,6 @@ export const ERROR_MESSAGES: Record<string, string> = {
   invalid_target: 'Нельзя выбрать эту цель',
   action_already_submitted: 'Вы уже совершили действие',
   game_paused: 'Игра на паузе',
-  internal_error: 'Нет связи с сервером',
+  insufficient_players: 'Недостаточно игроков для выбранной конфигурации ролей',
+  internal_error: 'Внутренняя ошибка сервера',
 };

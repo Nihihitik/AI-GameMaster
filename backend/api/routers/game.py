@@ -312,7 +312,11 @@ async def vote(
     from sqlalchemy import func
 
     votes_cast = await db.scalar(select(func.count(DayVote.id)).where(DayVote.phase_id == phase.id))
-    votes_total = await db.scalar(select(func.count(Player.id)).where(Player.session_id == session_id, Player.status == "alive"))
+    # Exclude lover-blocked player from total so "all voted" check is correct.
+    votes_total_q = select(func.count(Player.id)).where(Player.session_id == session_id, Player.status == "alive")
+    if rt.day_blocked_player is not None:
+        votes_total_q = votes_total_q.where(Player.id != rt.day_blocked_player)
+    votes_total = await db.scalar(votes_total_q)
     await ws_manager.send_to_session(session_id, {"type": "vote_update", "payload": {"votes_cast": int(votes_cast or 0), "votes_total": int(votes_total or 0)}})
     if int(votes_cast or 0) >= int(votes_total or 0) and int(votes_total or 0) > 0:
         # закончить досрочно: отменяем таймер голосования и резолвим
@@ -370,9 +374,23 @@ async def state(
         and player.id in rt.blocked_tonight
     )
 
+    # During pause, use the snapshot's remaining_seconds as timer_seconds and
+    # set timer_started_at to "now" so the frontend's computeRemainingSeconds
+    # shows the frozen value instead of a stale countdown hitting 0.
+    effective_timer_seconds = rt.timer_seconds
+    effective_timer_started_at = rt.timer_started_at.isoformat() if rt.timer_started_at else None
+    if paused:
+        gp_snap = ((session.settings or {}).get("game_pause") or {}).get("snapshot") or {}
+        snap_remaining = gp_snap.get("remaining_seconds")
+        if snap_remaining is not None:
+            from datetime import datetime, timezone
+            effective_timer_seconds = int(snap_remaining)
+            effective_timer_started_at = datetime.now(timezone.utc).isoformat()
+
     response = {
         "session_status": session.status,
         "game_paused": paused,
+        "settings": session.settings or {},
         "phase": {
             "id": str(phase.id) if phase else None,
             "type": phase.phase_type if phase else None,
@@ -380,8 +398,8 @@ async def state(
             "sub_phase": rt.day_sub_phase if phase and phase.phase_type == "day" else None,
             "night_turn": rt.night_turn if phase and phase.phase_type == "night" else None,
             "started_at": phase.started_at.isoformat() if phase else None,
-            "timer_seconds": rt.timer_seconds,
-            "timer_started_at": rt.timer_started_at.isoformat() if rt.timer_started_at else None,
+            "timer_seconds": effective_timer_seconds,
+            "timer_started_at": effective_timer_started_at,
         },
         "my_player": {
             "id": str(player.id),
@@ -508,10 +526,26 @@ async def state(
         from sqlalchemy import func
 
         cast = await db.scalar(select(func.count(DayVote.id)).where(DayVote.phase_id == phase.id))
-        total = await db.scalar(
-            select(func.count(Player.id)).where(Player.session_id == session_id, Player.status == "alive")
-        )
+        total_q = select(func.count(Player.id)).where(Player.session_id == session_id, Player.status == "alive")
+        if rt.day_blocked_player is not None:
+            total_q = total_q.where(Player.id != rt.day_blocked_player)
+        total = await db.scalar(total_q)
         response["votes"] = {"total_expected": int(total or 0), "cast": int(cast or 0)}
+
+        # Voting targets (alive except self, excluding blocked)
+        is_voter_blocked = rt.day_blocked_player is not None and rt.day_blocked_player == player.id
+        if player.status == "alive" and not is_voter_blocked:
+            response["available_targets"] = [
+                {"player_id": str(p.id), "name": p.name}
+                for p in all_players
+                if p.status == "alive" and p.id != player.id
+            ]
+            response["awaiting_action"] = True
+
+        my_vote = await db.scalar(
+            select(DayVote.id).where(DayVote.phase_id == phase.id, DayVote.voter_player_id == player.id)
+        )
+        response["my_vote_submitted"] = my_vote is not None
 
     if session.status == "finished" and phase is None:
         from models.game_event import GameEvent
@@ -549,3 +583,74 @@ async def state(
     return response
 
 
+@router.post("/{session_id}/reset-to-lobby")
+async def reset_to_lobby(
+    session_id: uuid.UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset a finished game session back to lobby (waiting) state.
+
+    Only the host can do this. Clears game phases, events, night actions, day votes,
+    resets all players to alive, and sets session.status = 'waiting'.
+    """
+    session = await db.get(Session, session_id)
+    if session is None:
+        raise GameError(404, "session_not_found", "Сессия не найдена")
+    if session.status != "finished":
+        raise GameError(400, "wrong_status", "Сессия не завершена")
+
+    player = await db.scalar(
+        select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
+    )
+    if player is None:
+        raise GameError(404, "player_not_found", "Игрок не найден в этой сессии")
+    if player.join_order != 1:
+        raise GameError(403, "not_host", "Только хост может вернуть в лобби")
+
+    from sqlalchemy import delete as sa_delete
+    from models.game_event import GameEvent
+
+    # Delete game data
+    phases = (await db.scalars(select(GamePhase.id).where(GamePhase.session_id == session_id))).all()
+    if phases:
+        await db.execute(sa_delete(NightAction).where(NightAction.phase_id.in_(phases)))
+        await db.execute(sa_delete(DayVote).where(DayVote.phase_id.in_(phases)))
+    await db.execute(sa_delete(GamePhase).where(GamePhase.session_id == session_id))
+    await db.execute(sa_delete(GameEvent).where(GameEvent.session_id == session_id))
+
+    # Reset players
+    all_players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
+    for p in all_players:
+        p.status = "alive"
+        p.role_id = None
+
+    # Reset session
+    session.status = "waiting"
+    session.ended_at = None
+    # Keep settings but remove pause snapshot
+    cur = dict(session.settings or {})
+    cur.pop("game_pause", None)
+    session.settings = cur
+
+    await db.commit()
+
+    # Clear runtime state
+    from services.runtime_state import runtime_state as rs
+    from services.timer_service import timer_service as ts
+    await ts.cancel_all(session_id)
+    rs.clear(session_id)
+
+    # Notify all players
+    await ws_manager.send_to_session(
+        session_id,
+        {
+            "type": "session_reset",
+            "payload": {
+                "session_id": str(session_id),
+                "session_code": session.code,
+                "status": "waiting",
+            },
+        },
+    )
+    return {"status": "waiting", "session_code": session.code}

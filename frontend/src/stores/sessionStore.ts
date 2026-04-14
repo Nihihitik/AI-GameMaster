@@ -61,7 +61,7 @@ interface SessionState {
   // Local-only actions
   setWithStory: (value: boolean) => void;
   setSelectedStory: (storyId: string) => void;
-  setTimerPaused: (paused: boolean) => void;
+  setTimerPaused: (paused: boolean) => Promise<void>;
   reset: () => void;
 }
 
@@ -226,8 +226,24 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ selectedStoryId: storyId });
   },
 
-  setTimerPaused: (paused) => {
-    set({ timerPaused: paused });
+  setTimerPaused: async (paused) => {
+    const state = get();
+    // sessionStore.session may be null after game page refresh;
+    // fall back to gameStore.sessionId which is always set by loadState.
+    // Lazy import to avoid circular dependency with gameStore.
+    const { useGameStore: gStore } = await import('./gameStore');
+    const sessionId = state.session?.id ?? gStore.getState().sessionId;
+    if (!sessionId) return;
+    try {
+      if (paused) {
+        await sessionApi.pause(sessionId);
+      } else {
+        await sessionApi.resume(sessionId);
+      }
+    } catch {
+      // Если бек вернул ошибку (уже на паузе / не на паузе) — пробуем всё равно
+      // синхронизировать локальное состояние через WS.
+    }
   },
 
   reset: () => {

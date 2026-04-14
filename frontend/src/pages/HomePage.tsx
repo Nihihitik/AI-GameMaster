@@ -8,6 +8,10 @@ import Slider from '../components/ui/Slider';
 import { useSessionStore, MIN_PLAYERS, MAX_PLAYERS, getSpecialRolesCount, getCiviliansCount } from '../stores/sessionStore';
 import { useAuthStore } from '../stores/authStore';
 import { SessionSettings, RoleConfig } from '../types/game';
+import { parseApiError } from '../utils/parseApiError';
+import { ERROR_MESSAGES } from '../utils/constants';
+import { subscriptionsApi } from '../api/subscriptionsApi';
+import { authApi } from '../api/authApi';
 import './HomePage.scss';
 
 const DEFAULT_CREATE_SETTINGS: SessionSettings = {
@@ -28,6 +32,9 @@ const DEFAULT_CREATE_SETTINGS: SessionSettings = {
 export default function HomePage() {
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showProModal, setShowProModal] = useState(false);
+  const [upgrading, setUpgrading] = useState(false);
+  const [upgradeError, setUpgradeError] = useState('');
   const [joinCode, setJoinCode] = useState('');
   const [joinName, setJoinName] = useState('');
   const [joinError, setJoinError] = useState('');
@@ -76,7 +83,13 @@ export default function HomePage() {
       setShowCreateModal(false);
       navigate(`/sessions/${code}`);
     } catch (err: any) {
-      setCreateError(err?.message || 'Не удалось создать сессию');
+      const parsed = parseApiError(err);
+      if (parsed.code === 'pro_required') {
+        setShowCreateModal(false);
+        setShowProModal(true);
+        return;
+      }
+      setCreateError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
     } finally {
       setCreating(false);
     }
@@ -110,7 +123,8 @@ export default function HomePage() {
       setJoinError('');
       navigate(`/sessions/${normalizedCode}`);
     } catch (err: any) {
-      setJoinError(err?.message || 'Не удалось присоединиться');
+      const parsed = parseApiError(err);
+      setJoinError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
     } finally {
       setJoining(false);
     }
@@ -127,6 +141,24 @@ export default function HomePage() {
   const handleCloseCreateModal = () => {
     setShowCreateModal(false);
     setCreateError('');
+  };
+
+  const handleUpgradeToPro = async () => {
+    setUpgrading(true);
+    setUpgradeError('');
+    try {
+      await subscriptionsApi.create({ plan: 'pro' });
+      const me = await authApi.me();
+      useAuthStore.getState().setUser(me.data);
+      setShowProModal(false);
+      // Auto-retry session creation
+      await handleConfirmCreate();
+    } catch (err) {
+      const parsed = parseApiError(err);
+      setUpgradeError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+    } finally {
+      setUpgrading(false);
+    }
   };
 
   return (
@@ -230,6 +262,7 @@ export default function HomePage() {
               min={MIN_PLAYERS}
               max={MAX_PLAYERS}
               step={1}
+              unit="чел"
               onChange={setPlayerCount}
             />
           </div>
@@ -286,8 +319,8 @@ export default function HomePage() {
               onChange={(v) => updateRoleConfig('maniac', v)} />
 
             <div className="create-modal__civilians">
-              <span>Мирные жители</span>
-              <span>{civiliansCount}</span>
+              <span className="create-modal__civilians-label">Мирные жители</span>
+              <span className="create-modal__civilians-count">{civiliansCount}</span>
             </div>
           </div>
 
@@ -296,6 +329,43 @@ export default function HomePage() {
           <div className="create-modal__actions">
             <Button onClick={handleConfirmCreate} disabled={creating}>
               {creating ? 'Создание...' : 'Создать'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showProModal}
+        onClose={() => {
+          setShowProModal(false);
+          setUpgradeError('');
+        }}
+        title="Требуется подписка Pro"
+      >
+        <div className="pro-modal">
+          <div className="pro-modal__benefits">
+            <div className="pro-modal__benefit">
+              <span className="pro-modal__benefit-icon">🆓</span>
+              <span className="pro-modal__benefit-text">Бесплатно: до 12 игроков</span>
+            </div>
+            <div className="pro-modal__benefit pro-modal__benefit--highlight">
+              <span className="pro-modal__benefit-icon">👑</span>
+              <span className="pro-modal__benefit-text">Pro: до 16 игроков + новые роли (Дон, Любовница, Маньяк)</span>
+            </div>
+          </div>
+          
+          <div className="pro-modal__warning">
+            <p>⚠️ Это dev-мокап — реальная оплата не проводится. Подписка Pro на 30 дней выдаётся бесплатно для тестирования.</p>
+          </div>
+
+          {upgradeError && <div className="pro-modal__error">{upgradeError}</div>}
+
+          <div className="pro-modal__actions">
+            <Button onClick={() => setShowProModal(false)} disabled={upgrading}>
+              Отмена
+            </Button>
+            <Button onClick={handleUpgradeToPro} loading={upgrading}>
+              Оформить Pro
             </Button>
           </div>
         </div>

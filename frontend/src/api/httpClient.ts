@@ -9,6 +9,7 @@ const httpClient = axios.create({
 
 // Флаг, предотвращающий параллельные refresh-запросы
 let isRefreshing = false;
+let refreshPromise: Promise<string> | null = null;
 let failedQueue: Array<{
   resolve: (token: string) => void;
   reject: (error: unknown) => void;
@@ -20,6 +21,38 @@ function processQueue(error: unknown, token: string | null) {
     else reject(error);
   });
   failedQueue = [];
+}
+
+/**
+ * Shared refresh function used by both the interceptor and authStore.initialize().
+ * Deduped: concurrent callers share the same in-flight promise.
+ */
+export async function refreshAccessToken(): Promise<string> {
+  if (isRefreshing && refreshPromise) return refreshPromise;
+
+  isRefreshing = true;
+  refreshPromise = (async () => {
+    const refreshToken = localStorage.getItem('refresh_token');
+    if (!refreshToken) throw new Error('No refresh token');
+    const { data } = await axios.post(
+      `${API_BASE_URL}/api/auth/refresh`,
+      { refresh_token: refreshToken },
+    );
+    useAuthStore.getState().setTokens(data.access_token, data.refresh_token);
+    return data.access_token as string;
+  })();
+
+  try {
+    const token = await refreshPromise;
+    processQueue(null, token);
+    return token;
+  } catch (err) {
+    processQueue(err, null);
+    throw err;
+  } finally {
+    isRefreshing = false;
+    refreshPromise = null;
+  }
 }
 
 // Request interceptor — добавляет токен
@@ -56,29 +89,23 @@ httpClient.interceptors.response.use(
       }
 
       originalRequest._retry = true;
-      isRefreshing = true;
 
       try {
-        const refreshToken = localStorage.getItem('refresh_token');
-        if (!refreshToken) throw new Error('No refresh token');
-
-        const { data } = await axios.post(
-          `${API_BASE_URL}/api/auth/refresh`,
-          { refresh_token: refreshToken }
-        );
-
-        useAuthStore.getState().setTokens(data.access_token, data.refresh_token);
-        processQueue(null, data.access_token);
-
-        originalRequest.headers.Authorization = `Bearer ${data.access_token}`;
+        const newToken = await refreshAccessToken();
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
         return httpClient(originalRequest);
       } catch (refreshError) {
-        processQueue(refreshError, null);
+        // Если другой параллельный refresh уже успешно обновил токены,
+        // не разлогиниваем — просто повторяем запрос с новым токеном.
+        const currentToken = useAuthStore.getState().accessToken;
+        const headerToken = originalRequest.headers.Authorization?.toString().replace('Bearer ', '');
+        if (currentToken && currentToken !== headerToken) {
+          originalRequest.headers.Authorization = `Bearer ${currentToken}`;
+          return httpClient(originalRequest);
+        }
         useAuthStore.getState().logout();
         window.location.href = '/auth';
         return Promise.reject(refreshError);
-      } finally {
-        isRefreshing = false;
       }
     }
 

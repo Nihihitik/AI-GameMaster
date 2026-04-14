@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useGameStore } from '../stores/gameStore';
 import { useSessionStore } from '../stores/sessionStore';
+import { parseApiError } from '../utils/parseApiError';
+import { ERROR_MESSAGES } from '../utils/constants';
 import { wsClient } from '../api/wsClient';
 import { getRoleInfo, CARD_BACK_IMAGE } from '../utils/roles';
 import NarratorScreen from '../components/game/NarratorScreen';
@@ -72,6 +74,7 @@ export default function GamePage() {
 
   const timerPaused = useSessionStore((s) => s.timerPaused);
   const setTimerPaused = useSessionStore((s) => s.setTimerPaused);
+  const roleRevealTimer = useSessionStore((s) => s.settings.role_reveal_timer_seconds);
 
   const [showRules, setShowRules] = useState(false);
   const [flipped, setFlipped] = useState(false);
@@ -107,7 +110,8 @@ export default function GamePage() {
         wsClient.connect(sessionId);
       } catch (err: any) {
         if (!cancelled) {
-          setLoadError(err?.message || 'Не удалось загрузить состояние игры');
+          const parsed = parseApiError(err);
+          setLoadError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -121,12 +125,27 @@ export default function GamePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  // Role reveal timer — uses the current phase timer.
+  // Auto-flip card if already acknowledged (e.g. after page refresh).
+  useEffect(() => {
+    if (screen === 'role_reveal' && acknowledged && !flipped) {
+      setFlipped(true);
+      setShowAbilities(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, acknowledged]);
+
+  // Role reveal timer — sync with backend timer_started_at.
   useEffect(() => {
     if (screen !== 'role_reveal') return;
-    const seconds = phase?.timer_seconds ?? 15;
-    setTimeLeft(seconds);
-  }, [screen, phase?.id, phase?.timer_seconds]);
+    const timerSec = phase?.timer_seconds ?? roleRevealTimer;
+    const startedAt = phase?.timer_started_at;
+    if (!timerSec) { setTimeLeft(roleRevealTimer); return; }
+    if (!startedAt) { setTimeLeft(timerSec); return; }
+    const startedMs = Date.parse(startedAt);
+    if (Number.isNaN(startedMs)) { setTimeLeft(timerSec); return; }
+    const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+    setTimeLeft(Math.max(0, timerSec - elapsed));
+  }, [screen, phase?.id, phase?.timer_seconds, phase?.timer_started_at, roleRevealTimer]);
 
   useEffect(() => {
     if (screen !== 'role_reveal') return;

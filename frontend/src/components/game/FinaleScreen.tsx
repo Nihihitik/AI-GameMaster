@@ -1,15 +1,19 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import { gameApi } from '../../api/gameApi';
 import { getRoleInfo, CARD_BACK_IMAGE } from '../../utils/roles';
 import './FinaleScreen.scss';
 
 export default function FinaleScreen() {
   const navigate = useNavigate();
   const result = useGameStore((s) => s.result);
+  const sessionId = useGameStore((s) => s.sessionId);
   const resetGame = useGameStore((s) => s.reset);
   const resetSession = useSessionStore((s) => s.reset);
+  const isHost = useSessionStore((s) => s.isHost);
+  const [resetting, setResetting] = useState(false);
 
   if (!result) return null;
 
@@ -27,6 +31,18 @@ export default function FinaleScreen() {
     resetGame();
     resetSession();
     navigate('/', { replace: true });
+  };
+
+  const handleBackToLobby = async () => {
+    if (!sessionId || resetting) return;
+    setResetting(true);
+    try {
+      const resp = await gameApi.resetToLobby(sessionId);
+      resetGame();
+      navigate(`/lobby/${resp.data.session_code}`, { replace: true });
+    } catch {
+      setResetting(false);
+    }
   };
 
   return (
@@ -94,6 +110,15 @@ export default function FinaleScreen() {
         </div>
 
         <div className="finale__actions">
+          {isHost && (
+            <button
+              className="finale__lobby-btn"
+              onClick={handleBackToLobby}
+              disabled={resetting}
+            >
+              {resetting ? 'Возврат...' : 'Вернуться в лобби'}
+            </button>
+          )}
           <button className="finale__home-btn" onClick={handleGoHome}>
             На главную
           </button>

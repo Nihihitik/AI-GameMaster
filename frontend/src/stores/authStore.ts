@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { UserProfile } from '../types/api';
 import { authApi } from '../api/authApi';
+import { refreshAccessToken } from '../api/httpClient';
 
 interface AuthState {
   accessToken: string | null;
@@ -59,10 +60,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return;
     }
     try {
-      const refreshResponse = await authApi.refresh({ refresh_token: refreshToken });
-      const { access_token, refresh_token: newRefresh } = refreshResponse.data;
-      localStorage.setItem('refresh_token', newRefresh);
-      set({ accessToken: access_token, isAuthenticated: true });
+      // Use the shared deduped refresh to avoid race with httpClient interceptor.
+      await refreshAccessToken();
 
       const meResponse = await authApi.me();
       set({ user: meResponse.data });

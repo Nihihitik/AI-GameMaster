@@ -60,13 +60,16 @@ async def pause_game(db: AsyncSession, session: Session) -> dict:
         "blocked_tonight": [str(x) for x in rt.blocked_tonight],
     }
 
-    settings = {**cur, PAUSE_KEY: {"paused": True, "snapshot": snap}}
-    session.settings = settings
-    await db.commit()
-
+    # Cancel timers and set game_paused BEFORE db.commit() to prevent
+    # a race where a timer callback fires during the commit and triggers
+    # a phase transition before we've saved the pause snapshot.
     rt.game_paused = True
     await timer_service.cancel_all(session.id)
     rt.night_action_event.set()
+
+    settings = {**cur, PAUSE_KEY: {"paused": True, "snapshot": snap}}
+    session.settings = settings
+    await db.commit()
 
     await ws_manager.send_to_session(
         session.id,
@@ -193,6 +196,8 @@ async def resume_game(session_id: uuid.UUID) -> None:
 
     if ptype == "night":
         nt = str(snap.get("night_turn") or "mafia")
+        rt.timer_started_at = _now()
+        rt.timer_seconds = rem
         await ws_manager.send_to_session(
             session_id,
             {
@@ -201,6 +206,7 @@ async def resume_game(session_id: uuid.UUID) -> None:
                     "phase": {"type": "night", "number": int(snap.get("phase_number") or 0)},
                     "night_turn": nt,
                     "timer_seconds": rem,
+                    "timer_started_at": rt.timer_started_at.isoformat(),
                     "announcement": {"trigger": "game_resumed"},
                 },
             },

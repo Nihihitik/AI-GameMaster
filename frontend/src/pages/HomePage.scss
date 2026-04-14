@@ -242,3 +242,135 @@
     margin-top: 16px;
   }
 }
+
+.create-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+
+  &__section {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+
+    &-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.5);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin: 0 0 4px;
+    }
+  }
+
+  &__civilians {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    background: rgba(200, 30, 30, 0.04);
+    border: 1px dashed rgba(200, 30, 30, 0.15);
+    border-radius: 14px;
+    margin-top: 4px;
+
+    &-label {
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.7);
+      font-weight: 500;
+    }
+
+    &-count {
+      font-size: 22px;
+      font-weight: 800;
+      color: #c81e1e;
+      font-variant-numeric: tabular-nums;
+      min-width: 32px;
+      text-align: center;
+    }
+  }
+
+  &__error {
+    color: #ff4444;
+    font-size: 14px;
+    text-align: center;
+    background: rgba(255, 68, 68, 0.1);
+    padding: 10px;
+    border-radius: 8px;
+  }
+
+  &__actions {
+    margin-top: 8px;
+  }
+}
+
+.pro-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+
+  &__benefits {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+    padding: 16px;
+  }
+
+  &__benefit {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    &-icon {
+      font-size: 20px;
+    }
+
+    &-text {
+      font-size: 15px;
+      color: rgba(255, 255, 255, 0.8);
+      font-weight: 500;
+    }
+
+    &--highlight {
+      .pro-modal__benefit-text {
+        color: #ff4444;
+        font-weight: 600;
+      }
+    }
+  }
+
+  &__warning {
+    background: rgba(255, 200, 0, 0.1);
+    border: 1px solid rgba(255, 200, 0, 0.3);
+    border-radius: 12px;
+    padding: 12px 16px;
+
+    p {
+      margin: 0;
+      color: #ffdd55;
+      font-size: 13px;
+      line-height: 1.4;
+      text-align: center;
+    }
+  }
+
+  &__error {
+    color: #ff4444;
+    font-size: 14px;
+    text-align: center;
+    background: rgba(255, 68, 68, 0.1);
+    padding: 10px;
+    border-radius: 8px;
+  }
+
+  &__actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 8px;
+
+    button {
+      flex: 1;
+    }
+  }
+}

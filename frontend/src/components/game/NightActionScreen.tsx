@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useGameStore, CheckResultEntry } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import PauseButton from './PauseButton';
 import './NightActionScreen.scss';
 
 export default function NightActionScreen() {
@@ -12,7 +13,10 @@ export default function NightActionScreen() {
   const checkResults = useGameStore((s) => s.checkResults);
   const setSelectedTarget = useGameStore((s) => s.setSelectedTarget);
   const submitNightAction = useGameStore((s) => s.submitNightAction);
+  const healRestriction = useGameStore((s) => s.healRestriction);
+  const phase = useGameStore((s) => s.phase);
   const nightActionTimer = useSessionStore((s) => s.settings.night_action_timer_seconds);
+  const timerPaused = useSessionStore((s) => s.timerPaused);
 
   const [timeLeft, setTimeLeft] = useState(nightActionTimer);
   const [showCheckResult, setShowCheckResult] = useState<CheckResultEntry | null>(null);
@@ -21,12 +25,19 @@ export default function NightActionScreen() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastCheckCountRef = useRef(checkResults.length);
 
+  // Sync timer with backend timer_started_at (survives refresh & resume).
   useEffect(() => {
-    setTimeLeft(nightActionTimer);
-  }, [actionType, nightActionTimer]);
+    const timerSec = phase?.timer_seconds ?? nightActionTimer;
+    const startedAt = phase?.timer_started_at;
+    if (!startedAt) { setTimeLeft(timerSec); return; }
+    const startedMs = Date.parse(startedAt);
+    if (Number.isNaN(startedMs)) { setTimeLeft(timerSec); return; }
+    const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+    setTimeLeft(Math.max(0, timerSec - elapsed));
+  }, [actionType, phase?.timer_seconds, phase?.timer_started_at, nightActionTimer]);
 
   useEffect(() => {
-    if (actionSubmitted || timeLeft <= 0) {
+    if (actionSubmitted || timeLeft <= 0 || timerPaused) {
       if (intervalRef.current) clearInterval(intervalRef.current);
       return;
     }
@@ -34,7 +45,7 @@ export default function NightActionScreen() {
       setTimeLeft((t) => (t <= 1 ? 0 : t - 1));
     }, 1000);
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [actionSubmitted, timeLeft]);
+  }, [actionSubmitted, timeLeft, timerPaused]);
 
   // Surface a newly arrived check result (from WS or inline response).
   useEffect(() => {
@@ -182,6 +193,7 @@ export default function NightActionScreen() {
       <div className="night-action__blob night-action__blob--3" />
 
       <header className="night-action__header">
+        <PauseButton />
         <h2 className="night-action__title">{getActionTitle()}</h2>
         <div className={`night-action__timer ${timeLeft <= 5 ? 'night-action__timer--danger' : ''}`}>
           {formatTime(timeLeft)}
@@ -189,6 +201,16 @@ export default function NightActionScreen() {
       </header>
 
       <div className="night-action__label">{actionLabel}</div>
+
+      {healRestriction && actionType === 'heal' && (
+        <div className="night-action__heal-restriction">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" width="16" height="16">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+          </svg>
+          <span>{healRestriction.name}: {healRestriction.reason}</span>
+        </div>
+      )}
 
       <div className="night-action__targets">
         {availableTargets.map((target) => {

@@ -11,6 +11,8 @@ import { useGameStore } from '../stores/gameStore';
 import { gameApi } from '../api/gameApi';
 import { sessionApi } from '../api/sessionApi';
 import { wsClient } from '../api/wsClient';
+import { parseApiError } from '../utils/parseApiError';
+import { ERROR_MESSAGES } from '../utils/constants';
 import './LobbyPage.scss';
 
 export default function LobbyPage() {
@@ -21,6 +23,7 @@ export default function LobbyPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const session = useSessionStore((s) => s.session);
   const players = useSessionStore((s) => s.players);
@@ -28,6 +31,7 @@ export default function LobbyPage() {
   const isHost = useSessionStore((s) => s.isHost);
   const withStory = useSessionStore((s) => s.withStory);
   const setWithStory = useSessionStore((s) => s.setWithStory);
+  const myPlayerId = useSessionStore((s) => s.myPlayerId);
   const setSettings = useSessionStore((s) => s.setSettings);
 
   // Защита от двойного leave/close API-запроса при перехвате навигации.
@@ -101,12 +105,20 @@ export default function LobbyPage() {
         await useSessionStore.getState().loadByCode(code);
         if (cancelled) return;
         const loaded = useSessionStore.getState().session;
+        const myId = useSessionStore.getState().myPlayerId;
+        if (loaded && !myId) {
+          // Игрок не найден в сессии — вероятно, вышел из лобби в другом браузере.
+          useSessionStore.getState().reset();
+          navigate('/', { replace: true });
+          return;
+        }
         if (loaded) {
           wsClient.connect(loaded.id);
         }
       } catch (err: any) {
         if (!cancelled) {
-          setLoadError(err?.message || 'Не удалось загрузить сессию');
+          const parsed = parseApiError(err);
+          setLoadError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -153,7 +165,8 @@ export default function LobbyPage() {
         navigate(`/game/${session.id}`);
       }
     } catch (err: any) {
-      setLoadError(err?.message || 'Не удалось начать игру');
+      const parsed = parseApiError(err);
+      setStartError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
     } finally {
       setStarting(false);
     }
@@ -165,8 +178,9 @@ export default function LobbyPage() {
     if (newSpecial > MAX_PLAYERS) return;
     try {
       await setSettings({ role_config: newConfig });
-    } catch (err) {
-      // Swallow — UI stays on previous settings.
+    } catch (err: any) {
+      const parsed = parseApiError(err);
+      setLoadError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
     }
   };
 
@@ -178,8 +192,9 @@ export default function LobbyPage() {
   }>) => {
     try {
       await setSettings(partial);
-    } catch (err) {
-      // Swallow.
+    } catch (err: any) {
+      const parsed = parseApiError(err);
+      setLoadError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
     }
   };
 
@@ -243,7 +258,7 @@ export default function LobbyPage() {
             {players.map((player, index) => (
               <div
                 key={player.id}
-                className={`lobby-player-item ${player.is_host ? 'lobby-player-item--host' : ''}`}
+                className={`lobby-player-item ${player.id === myPlayerId ? 'lobby-player-item--me' : ''}`}
                 style={{ animationDelay: `${index * 0.08}s` }}
               >
                 <div className="lobby-player-item__avatar">
@@ -269,6 +284,11 @@ export default function LobbyPage() {
 
         {isHost && (
           <div className="lobby-start">
+            {startError && (
+              <div className="lobby-start__error" onClick={() => setStartError(null)}>
+                {startError}
+              </div>
+            )}
             <Button onClick={handleStartGame} disabled={!canStart || starting}>
               {starting
                 ? 'Запуск...'

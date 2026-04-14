@@ -27,9 +27,15 @@ export default function NarratorScreen() {
   const currentText = effectiveTexts[effectiveIndex] || '';
   const [displayedChars, setDisplayedChars] = useState(0);
   const [isTyping, setIsTyping] = useState(true);
-  const [autoMode, setAutoMode] = useState(false);
-  const [volume, setVolume] = useState(80);
-  const [muted, setMuted] = useState(false);
+  const [autoMode, setAutoMode] = useState(() => {
+    try { return localStorage.getItem('narrator_auto') === '1'; } catch { return false; }
+  });
+  const [volume, setVolume] = useState(() => {
+    try { return Number(localStorage.getItem('narrator_vol') ?? 80); } catch { return 80; }
+  });
+  const [muted, setMuted] = useState(() => {
+    try { return localStorage.getItem('narrator_mute') === '1'; } catch { return false; }
+  });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -145,7 +151,7 @@ export default function NarratorScreen() {
       <div className="narrator-screen__controls">
         <button
           className={`narrator-screen__auto-btn ${autoMode ? 'narrator-screen__auto-btn--active' : ''}`}
-          onClick={(e) => { e.stopPropagation(); setAutoMode(!autoMode); }}
+          onClick={(e) => { e.stopPropagation(); const next = !autoMode; setAutoMode(next); try { localStorage.setItem('narrator_auto', next ? '1' : '0'); } catch {} }}
           title="Авто-режим"
         >
           <span>АВТО</span>
@@ -154,7 +160,7 @@ export default function NarratorScreen() {
         <div className="narrator-screen__volume-group">
           <button
             className="narrator-screen__mute-btn"
-            onClick={(e) => { e.stopPropagation(); setMuted(!muted); }}
+            onClick={(e) => { e.stopPropagation(); const next = !muted; setMuted(next); try { localStorage.setItem('narrator_mute', next ? '1' : '0'); } catch {} }}
             title={muted ? 'Включить звук' : 'Выключить звук'}
           >
             {muted || volume === 0 ? (
@@ -181,7 +187,8 @@ export default function NarratorScreen() {
               e.stopPropagation();
               const v = Number(e.target.value);
               setVolume(v);
-              if (v > 0) setMuted(false);
+              try { localStorage.setItem('narrator_vol', String(v)); } catch {}
+              if (v > 0) { setMuted(false); try { localStorage.setItem('narrator_mute', '0'); } catch {} }
             }}
             onClick={(e) => e.stopPropagation()}
           />

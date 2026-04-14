@@ -176,6 +176,32 @@
 
   &__actions {
     width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  &__lobby-btn {
+    width: 100%;
+    padding: 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(200, 30, 30, 0.4);
+    background: rgba(200, 30, 30, 0.15);
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+
+    &:hover:not(:disabled) {
+      background: rgba(200, 30, 30, 0.25);
+      border-color: rgba(200, 30, 30, 0.6);
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
   }
 
   &__home-btn {

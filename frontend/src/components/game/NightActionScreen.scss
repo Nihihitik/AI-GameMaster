@@ -97,6 +97,26 @@
     z-index: 1;
   }
 
+  &__heal-restriction {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    margin: 0 20px 12px;
+    background: rgba(200, 30, 30, 0.1);
+    border: 1px solid rgba(200, 30, 30, 0.25);
+    border-radius: 8px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.6);
+    position: relative;
+    z-index: 1;
+
+    svg {
+      flex-shrink: 0;
+      color: #c81e1e;
+    }
+  }
+
   &__targets {
     flex: 1;
     padding: 0 20px;

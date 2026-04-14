@@ -192,6 +192,26 @@ class WsClient {
       case 'game_finished':
         return gameStore.setResult?.(msg.payload);
 
+      case 'game_paused':
+        sessionStore.timerPaused !== true && useSessionStore.setState({ timerPaused: true });
+        return;
+
+      case 'game_resumed':
+        useSessionStore.setState({ timerPaused: false });
+        // Update phase timer info so screens can sync the countdown.
+        gameStore.applyPhase?.(msg.payload);
+        return;
+
+      case 'session_reset': {
+        // Host reset game → all players go back to lobby.
+        const code = msg.payload?.session_code;
+        gameStore.reset?.();
+        if (code && typeof window !== 'undefined') {
+          window.location.href = `/lobby/${code}`;
+        }
+        return;
+      }
+
       case 'pong':
         // heartbeat reply — ничего не делаем
         return;

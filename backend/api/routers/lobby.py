@@ -218,8 +218,12 @@ async def pause_session(
     session = await db.get(Session, session_id)
     if session is None:
         raise GameError(404, "session_not_found", "Сессия не найдена")
-    if session.host_user_id != current_user.id:
-        raise GameError(403, "not_host", "Только организатор может поставить игру на паузу")
+    # Любой игрок сессии может поставить паузу.
+    player = await db.scalar(
+        select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
+    )
+    if player is None:
+        raise GameError(403, "player_not_found", "Вы не участник этой сессии")
     return await pause_game(db, session)
 
 
@@ -232,8 +236,12 @@ async def resume_session(
     session = await db.get(Session, session_id)
     if session is None:
         raise GameError(404, "session_not_found", "Сессия не найдена")
-    if session.host_user_id != current_user.id:
-        raise GameError(403, "not_host", "Только организатор может снять паузу")
+    # Любой игрок сессии может снять паузу.
+    player = await db.scalar(
+        select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
+    )
+    if player is None:
+        raise GameError(403, "player_not_found", "Вы не участник этой сессии")
     if session.status != "active":
         raise GameError(409, "wrong_phase", "Сессия не в игре")
     await resume_game(session_id)
