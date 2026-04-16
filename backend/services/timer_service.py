@@ -6,8 +6,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
+
+from core.logging import log_event, log_exception
+
+
+logger = logging.getLogger(__name__)
 
 
 class TimerService:
@@ -24,18 +30,22 @@ class TimerService:
         await self.cancel_timer(session_id, timer_name)
         task = asyncio.create_task(self._run(session_id, timer_name, seconds, callback))
         self._timers.setdefault(session_id, {})[timer_name] = task
+        log_event(logger, logging.DEBUG, "timer.started", "Timer started", session_id=str(session_id), timer_name=timer_name, seconds=seconds)
 
     async def cancel_timer(self, session_id: uuid.UUID, timer_name: str):
         timers = self._timers.get(session_id, {})
         task = timers.pop(timer_name, None)
         if task and not task.done():
             task.cancel()
+            log_event(logger, logging.DEBUG, "timer.cancelled", "Timer cancelled", session_id=str(session_id), timer_name=timer_name)
 
     async def cancel_all(self, session_id: uuid.UUID):
         timers = self._timers.pop(session_id, {})
         for task in timers.values():
             if not task.done():
                 task.cancel()
+        if timers:
+            log_event(logger, logging.DEBUG, "timer.cancelled_all", "All timers cancelled", session_id=str(session_id), timer_count=len(timers))
 
     def has_timer(self, session_id: uuid.UUID, timer_name: str) -> bool:
         task = self._timers.get(session_id, {}).get(timer_name)
@@ -47,10 +57,11 @@ class TimerService:
             await callback()
         except asyncio.CancelledError:
             pass
+        except Exception:
+            log_exception(logger, "timer.callback_failed", "Timer callback failed", session_id=str(session_id), timer_name=timer_name)
         finally:
             timers = self._timers.get(session_id, {})
             timers.pop(timer_name, None)
 
 
 timer_service = TimerService()
-

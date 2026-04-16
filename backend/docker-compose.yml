@@ -34,6 +34,10 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       # CORS: докер-фронт (3001), локальный CRA (3000), Vite (5173)
       CORS_ORIGINS: http://localhost:3000,http://localhost:5173
+      APP_ENV: development
+      LOG_LEVEL: DEBUG
+      PYTHONUNBUFFERED: "1"
+      FRONTEND_LOG_INGEST_ENABLED: "true"
     ports:
       - "8000:8000"
     # Bind-mount для горячей перезагрузки uvicorn --reload

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user, get_db, has_active_pro
 from core.exceptions import GameError
+from core.logging import log_event, set_log_context
 from models.refresh_token import RefreshToken
 from models.user import User
 from schemas.auth import (
@@ -40,6 +42,7 @@ from services.auth_service import (
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/register", response_model=AuthResponse, status_code=201)
@@ -72,6 +75,8 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
     except IntegrityError:
         await db.rollback()
         raise GameError(409, "email_already_registered", "Этот email уже зарегистрирован")
+    set_log_context(user_id=str(user.id))
+    log_event(logger, logging.INFO, "auth.register_succeeded", "User registered", user_id=str(user.id))
 
     return AuthResponse(
         user_id=str(user.id),
@@ -101,6 +106,8 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> Au
         )
     )
     await db.commit()
+    set_log_context(user_id=str(user.id))
+    log_event(logger, logging.INFO, "auth.login_succeeded", "User logged in", user_id=str(user.id))
 
     return AuthResponse(
         user_id=str(user.id),
@@ -144,6 +151,8 @@ async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -
         )
     )
     await db.commit()
+    set_log_context(user_id=str(user.id))
+    log_event(logger, logging.INFO, "auth.token_refreshed", "Refresh token rotated", user_id=str(user.id))
 
     return TokenResponse(access_token=access, refresh_token=refresh_token)
 
@@ -168,6 +177,13 @@ async def update_me_nickname(
     current_user.display_name = payload.nickname
     await db.commit()
     await db.refresh(current_user)
+    log_event(
+        logger,
+        logging.INFO,
+        "auth.profile_updated",
+        "User nickname updated",
+        user_id=str(current_user.id),
+    )
     return MeResponse(
         user_id=str(current_user.id),
         email=current_user.email,
@@ -186,6 +202,7 @@ async def delete_account(
     if not verify_password(payload.password, current_user.password_hash):
         raise GameError(401, "invalid_credentials", "Неверный пароль")
     await delete_user_account(db, current_user.id)
+    log_event(logger, logging.INFO, "auth.account_deleted", "User account deleted", user_id=str(current_user.id))
     return None
 
 
@@ -202,5 +219,5 @@ async def logout(
         )
     )
     await db.commit()
+    log_event(logger, logging.INFO, "auth.logout_succeeded", "User logged out", user_id=str(current_user.id))
     return None
-

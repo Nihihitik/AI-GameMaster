@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user, get_db, get_player_or_404, get_session_or_404, require_host
 from core.exceptions import GameError
+from core.logging import log_event, set_log_context
 from models.game_event import GameEvent
 from models.player import Player
 from models.session import Session
@@ -24,6 +26,7 @@ from services.ws_manager import ws_manager
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/{session_id}/players")
@@ -72,6 +75,16 @@ async def leave_lobby(
         )
     )
     await db.commit()
+    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
+    log_event(
+        logger,
+        logging.INFO,
+        "session.left",
+        "Player left lobby",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+        player_id=str(pid),
+    )
 
     await ws_manager.send_to_session(session_id, {"type": "player_left", "payload": {"player_id": str(pid)}})
     return None
@@ -114,6 +127,15 @@ async def kick_player(
             session_id, kicked_user_id, {"type": "kicked", "payload": {"reason": "host_kicked"}}
         )
         await ws_manager.close_connection(session_id, kicked_user_id, code=4000)
+        log_event(
+            logger,
+            logging.INFO,
+            "session.player_kicked",
+            "Host kicked player during active game",
+            session_id=str(session_id),
+            user_id=str(current_user.id),
+            player_id=str(player_id),
+        )
         return None
 
     if session.status != "waiting":
@@ -126,6 +148,15 @@ async def kick_player(
     await ws_manager.send_to_session(session_id, {"type": "player_left", "payload": {"player_id": str(player_id)}})
     await ws_manager.send_to_user(session_id, kicked_user_id, {"type": "kicked", "payload": {"reason": "host_kicked"}})
     await ws_manager.close_connection(session_id, kicked_user_id, code=4000)
+    log_event(
+        logger,
+        logging.INFO,
+        "session.player_kicked",
+        "Host kicked player from lobby",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+        player_id=str(player_id),
+    )
     return None
 
 
@@ -155,6 +186,14 @@ async def close_session(
         )
     )
     await db.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "session.closed",
+        "Session closed by host",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+    )
 
     await ws_manager.send_to_session(session_id, {"type": "session_closed", "payload": {}})
     await ws_manager.close_session(session_id)
@@ -183,6 +222,15 @@ async def update_settings(
 
     session.settings = {**current, **patch}
     await db.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "session.settings_updated",
+        "Session settings updated",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+        updated_fields=list(patch.keys()),
+    )
 
     await ws_manager.send_to_session(
         session_id,
@@ -204,7 +252,16 @@ async def pause_session(
     )
     if player is None:
         raise GameError(403, "player_not_found", "Вы не участник этой сессии")
-    return await pause_game(db, session)
+    result = await pause_game(db, session)
+    log_event(
+        logger,
+        logging.INFO,
+        "game.paused",
+        "Game paused",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+    )
+    return result
 
 
 @router.post("/{session_id}/resume")
@@ -223,5 +280,12 @@ async def resume_session(
     if session.status != "active":
         raise GameError(409, "wrong_phase", "Сессия не в игре")
     await resume_game(session_id)
+    log_event(
+        logger,
+        logging.INFO,
+        "game.resumed",
+        "Game resumed",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+    )
     return {"resumed": True}
-

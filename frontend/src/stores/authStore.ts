@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { UserProfile } from '../types/api';
 import { authApi } from '../api/authApi';
 import { refreshAccessToken } from '../api/httpClient';
+import { logger } from '../services/logger';
 
 interface AuthState {
   accessToken: string | null;
@@ -48,6 +49,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
       localStorage.removeItem('refresh_token');
       set({ accessToken: null, user: null, isAuthenticated: false });
+      logger.info('auth.logout_success', 'User logged out on frontend');
     } finally {
       logoutInProgress = false;
     }
@@ -65,10 +67,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       const meResponse = await authApi.me();
       set({ user: meResponse.data });
+      logger.info('auth.initialize_success', 'Auth session restored from refresh token');
     } catch {
       // Невалидный/истёкший refresh — чистим всё и отправляем на /auth.
       localStorage.removeItem('refresh_token');
       set({ accessToken: null, user: null, isAuthenticated: false });
+      logger.warn('auth.initialize_failed', 'Failed to restore auth session from refresh token');
     } finally {
       set({ isInitializing: false });
     }

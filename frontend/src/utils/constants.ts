@@ -1,6 +1,10 @@
 export const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
 export const WS_BASE_URL = process.env.REACT_APP_WS_BASE_URL || 'ws://localhost:8000';
 export const USE_MOCKS = process.env.REACT_APP_USE_MOCKS === 'true';
+export const APP_ENV = process.env.REACT_APP_APP_ENV || process.env.NODE_ENV || 'development';
+export const CLIENT_LOG_LEVEL = process.env.REACT_APP_LOG_LEVEL || (APP_ENV === 'development' ? 'debug' : 'info');
+export const REMOTE_LOGS_ENABLED = process.env.REACT_APP_REMOTE_LOGS_ENABLED !== 'false';
+export const REMOTE_LOG_MIN_LEVEL = process.env.REACT_APP_REMOTE_LOG_MIN_LEVEL || 'info';
 
 export const ROLE_LABELS: Record<string, string> = {
   mafia: 'Мафия',

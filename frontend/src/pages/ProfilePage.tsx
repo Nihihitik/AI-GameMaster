@@ -8,6 +8,8 @@ import { parseApiError } from '../utils/parseApiError';
 import { getApiErrorMessage } from '../utils/getApiErrorMessage';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
+import { logger } from '../services/logger';
+import { usePageViewLogger } from '../hooks/usePageViewLogger';
 import './ProfilePage.scss';
 
 export default function ProfilePage() {
@@ -34,6 +36,7 @@ export default function ProfilePage() {
   const [nicknameSaving, setNicknameSaving] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  usePageViewLogger('ProfilePage');
 
   // Загружаем статус подписки при монтировании
   useEffect(() => {
@@ -47,7 +50,9 @@ export default function ProfilePage() {
       .catch((err) => {
         if (!cancelled) {
           // Тихо игнорируем — показываем fallback (free) из профиля
-          console.warn('Failed to load subscription status', parseApiError(err));
+          logger.warn('api.nonfatal_failure', 'Failed to load subscription status', {
+            error: parseApiError(err),
+          });
         }
       })
       .finally(() => {
@@ -98,6 +103,7 @@ export default function ProfilePage() {
 
   const handleLogout = async () => {
     await logout();
+    logger.info('auth.logout_submit', 'Profile logout completed');
     navigate('/auth', { replace: true });
   };
 
@@ -125,7 +131,13 @@ export default function ProfilePage() {
       const me = await authApi.me();
       setUser(me.data);
       setIsEditingNickname(false);
+      logger.info('profile.nickname_updated', 'Nickname updated', {
+        userId: me.data.user_id,
+      }, { userId: me.data.user_id });
     } catch (err) {
+      logger.warn('api.nonfatal_failure', 'Failed to update nickname', {
+        reason: err instanceof Error ? err.message : String(err),
+      });
       setNicknameError(getApiErrorMessage(err));
     } finally {
       setNicknameSaving(false);

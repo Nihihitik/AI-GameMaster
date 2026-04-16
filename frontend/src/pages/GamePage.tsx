@@ -16,6 +16,8 @@ import RulesModal, { RulesButton } from '../components/game/RulesModal';
 import Button from '../components/ui/Button';
 import Loader from '../components/ui/Loader';
 import { useCountdown } from '../hooks/useCountdown';
+import { logger } from '../services/logger';
+import { usePageViewLogger } from '../hooks/usePageViewLogger';
 import './GamePage.scss';
 
 function NightActionIcon({ action }: { action: string }) {
@@ -82,6 +84,7 @@ export default function GamePage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const autoAcknowledgeRef = useRef(false);
+  usePageViewLogger('GamePage', { sessionId });
   const timeLeft = useCountdown({
     enabled: screen === 'role_reveal',
     paused: timerPaused || acknowledged,
@@ -117,6 +120,10 @@ export default function GamePage() {
         wsClient.connect(sessionId);
       } catch (err) {
         if (!cancelled) {
+          logger.error('game.critical_load_failed', 'Failed to load game page state', {
+            reason: err instanceof Error ? err.message : String(err),
+            sessionId,
+          }, { sessionId });
           setLoadError(getApiErrorMessage(err));
         }
       } finally {
@@ -136,7 +143,7 @@ export default function GamePage() {
       setFlipped(true);
       setShowAbilities(true);
     }
-  }, [screen, acknowledged]);
+  }, [screen, acknowledged, flipped]);
 
   useEffect(() => {
     if (screen !== 'role_reveal') {

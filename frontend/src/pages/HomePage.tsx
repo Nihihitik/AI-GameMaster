@@ -13,6 +13,8 @@ import { authApi } from '../api/authApi';
 import { createDefaultSessionSettings } from '../utils/sessionDefaults';
 import { getApiErrorMessage } from '../utils/getApiErrorMessage';
 import { parseApiError } from '../utils/parseApiError';
+import { logger } from '../services/logger';
+import { usePageViewLogger } from '../hooks/usePageViewLogger';
 import './HomePage.scss';
 
 export default function HomePage() {
@@ -35,6 +37,7 @@ export default function HomePage() {
 
   const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
+  usePageViewLogger('HomePage');
 
   const specialCount = getSpecialRolesCount(createSettings.role_config);
   const civiliansCount = getCiviliansCount(playerCount, createSettings.role_config);
@@ -61,6 +64,9 @@ export default function HomePage() {
     setCreateError('');
     try {
       const trimmedHostName = hostName.trim();
+      logger.info('session.create_submit', 'Submitting session creation request', {
+        playerCount,
+      });
       const code = await useSessionStore.getState().createSession({
         player_count: playerCount,
         settings: createSettings,
@@ -74,6 +80,9 @@ export default function HomePage() {
         setShowProModal(true);
         return;
       }
+      logger.warn('api.nonfatal_failure', 'Session creation failed', {
+        reason: err instanceof Error ? err.message : String(err),
+      });
       setCreateError(getApiErrorMessage(err));
     } finally {
       setCreating(false);
@@ -100,6 +109,9 @@ export default function HomePage() {
     setJoining(true);
     setJoinError('');
     try {
+      logger.info('session.join_submit', 'Submitting join session request', {
+        code: normalizedCode,
+      });
       await useSessionStore.getState().joinSession(normalizedCode, joinName.trim());
       setShowJoinModal(false);
       setJoinCode('');
@@ -108,6 +120,10 @@ export default function HomePage() {
       setJoinError('');
       navigate(`/sessions/${normalizedCode}`);
     } catch (err) {
+      logger.warn('api.nonfatal_failure', 'Join session failed', {
+        reason: err instanceof Error ? err.message : String(err),
+        code: normalizedCode,
+      });
       setJoinError(getApiErrorMessage(err));
     } finally {
       setJoining(false);
@@ -138,6 +154,9 @@ export default function HomePage() {
       // Auto-retry session creation
       await handleConfirmCreate();
     } catch (err) {
+      logger.warn('api.nonfatal_failure', 'Failed to upgrade subscription to pro', {
+        reason: err instanceof Error ? err.message : String(err),
+      });
       setUpgradeError(getApiErrorMessage(err));
     } finally {
       setUpgrading(false);

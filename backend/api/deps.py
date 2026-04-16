@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from sqlalchemy import select
@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_async_session
 from core.exceptions import GameError
+from core.logging import set_log_context
 from models.player import Player
 from models.session import Session
 from models.subscription import Subscription
@@ -36,6 +37,7 @@ async def get_db() -> AsyncSession:
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> User:
@@ -56,6 +58,31 @@ async def get_current_user(
     user = await db.get(User, uid)
     if user is None:
         raise GameError(status_code=401, code="token_invalid", message="Пользователь не найден")
+    request.state.user_id = str(user.id)
+    set_log_context(user_id=str(user.id))
+    return user
+
+
+async def get_optional_current_user(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    auth_header = request.headers.get("Authorization", "").strip()
+    if not auth_header.startswith("Bearer "):
+        return None
+
+    token = auth_header[7:]
+    try:
+        payload = decode_access_token(token)
+        user_id = uuid.UUID(str(payload.get("sub")))
+    except (JWTError, ValueError, TypeError):
+        return None
+
+    user = await db.get(User, user_id)
+    if user is None:
+        return None
+    request.state.user_id = str(user.id)
+    set_log_context(user_id=str(user.id))
     return user
 
 
@@ -98,4 +125,3 @@ async def has_active_pro(db: AsyncSession, user_id: uuid.UUID) -> bool:
         )
     )
     return exists is not None
-

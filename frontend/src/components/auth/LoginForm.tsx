@@ -4,6 +4,7 @@ import Button, { LinkButton } from '../ui/Button';
 import { authApi } from '../../api/authApi';
 import { useAuthStore } from '../../stores/authStore';
 import { getApiErrorMessage } from '../../utils/getApiErrorMessage';
+import { logger } from '../../services/logger';
 
 interface LoginFormProps {
   onToggle: () => void;
@@ -27,6 +28,7 @@ export default function LoginForm({ onToggle }: LoginFormProps) {
 
     setError(null);
     setLoading(true);
+    logger.info('auth.login_submit', 'Submitting login form');
 
     try {
       const { data } = await authApi.login({ email: email.trim(), password });
@@ -38,8 +40,14 @@ export default function LoginForm({ onToggle }: LoginFormProps) {
         has_pro: false,
         created_at: new Date().toISOString(),
       });
+      logger.info('auth.login_success', 'Login succeeded', {
+        userId: data.user_id,
+      }, { userId: data.user_id });
       // AuthPage will handle redirect
     } catch (err) {
+      logger.warn('api.nonfatal_failure', 'Login failed', {
+        reason: err instanceof Error ? err.message : String(err),
+      });
       setError(getApiErrorMessage(err));
     } finally {
       setLoading(false);

@@ -12,6 +12,8 @@ import { gameApi } from '../api/gameApi';
 import { sessionApi } from '../api/sessionApi';
 import { wsClient } from '../api/wsClient';
 import { getApiErrorMessage } from '../utils/getApiErrorMessage';
+import { logger } from '../services/logger';
+import { usePageViewLogger } from '../hooks/usePageViewLogger';
 import './LobbyPage.scss';
 
 export default function LobbyPage() {
@@ -85,6 +87,7 @@ export default function LobbyPage() {
 
   const specialCount = getSpecialRolesCount(settings.role_config);
   const civiliansCount = getCiviliansCount(session?.player_count || players.length, settings.role_config);
+  usePageViewLogger('LobbyPage', { code });
 
   // Load session + open WebSocket on mount; tear down on unmount.
   useEffect(() => {
@@ -116,6 +119,10 @@ export default function LobbyPage() {
         }
       } catch (err) {
         if (!cancelled) {
+          logger.warn('api.nonfatal_failure', 'Failed to load lobby session', {
+            reason: err instanceof Error ? err.message : String(err),
+            code,
+          });
           setLoadError(getApiErrorMessage(err));
         }
       } finally {
@@ -154,6 +161,10 @@ export default function LobbyPage() {
     setStarting(true);
     try {
       await gameApi.start(session.id);
+      logger.info('game.start_submit', 'Host submitted game start', {
+        sessionId: session.id,
+        withStory,
+      }, { sessionId: session.id });
       // Разрешаем blocker'у пропустить переход в игру — сессию НЕ закрываем.
       allowNavigationRef.current = true;
       if (withStory) {
@@ -162,6 +173,10 @@ export default function LobbyPage() {
         navigate(`/game/${session.id}`);
       }
     } catch (err) {
+      logger.warn('api.nonfatal_failure', 'Failed to start game', {
+        reason: err instanceof Error ? err.message : String(err),
+        sessionId: session.id,
+      }, { sessionId: session.id });
       setStartError(getApiErrorMessage(err));
     } finally {
       setStarting(false);
@@ -176,6 +191,11 @@ export default function LobbyPage() {
       setSettingsError(null);
       await setSettings({ role_config: newConfig });
     } catch (err) {
+      logger.warn('api.nonfatal_failure', 'Failed to update role config in lobby', {
+        reason: err instanceof Error ? err.message : String(err),
+        key,
+        value,
+      }, { sessionId: session?.id });
       setSettingsError(getApiErrorMessage(err));
     }
   };
@@ -190,6 +210,10 @@ export default function LobbyPage() {
       setSettingsError(null);
       await setSettings(partial);
     } catch (err) {
+      logger.warn('api.nonfatal_failure', 'Failed to update lobby timers', {
+        reason: err instanceof Error ? err.message : String(err),
+        partial,
+      }, { sessionId: session?.id });
       setSettingsError(getApiErrorMessage(err));
     }
   };

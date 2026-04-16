@@ -1,6 +1,7 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '../stores/authStore';
 import { API_BASE_URL } from '../utils/constants';
+import { logger, nextClientRequestId } from '../services/logger';
 
 const httpClient = axios.create({
   baseURL: `${API_BASE_URL}/api`,
@@ -31,6 +32,7 @@ export async function refreshAccessToken(): Promise<string> {
   if (isRefreshing && refreshPromise) return refreshPromise;
 
   isRefreshing = true;
+  logger.warn('auth.refresh_retry', 'Refreshing access token after authorization failure');
   refreshPromise = (async () => {
     const refreshToken = localStorage.getItem('refresh_token');
     if (!refreshToken) throw new Error('No refresh token');
@@ -58,9 +60,17 @@ export async function refreshAccessToken(): Promise<string> {
 // Request interceptor — добавляет токен
 httpClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const accessToken = useAuthStore.getState().accessToken;
+  const clientRequestId = config.headers['X-Client-Request-ID']?.toString() || nextClientRequestId();
+  config.headers['X-Client-Request-ID'] = clientRequestId;
   if (accessToken) {
     config.headers.Authorization = `Bearer ${accessToken}`;
   }
+  logger.debug('api.request_prepared', 'HTTP request prepared', {
+    method: config.method,
+    url: config.url,
+  }, {
+    clientRequestId,
+  });
   return config;
 });
 
@@ -103,11 +113,24 @@ httpClient.interceptors.response.use(
           originalRequest.headers.Authorization = `Bearer ${currentToken}`;
           return httpClient(originalRequest);
         }
+        logger.warn('auth.force_logout_after_refresh_failure', 'Forced logout after refresh failure', {
+          url: originalRequest.url,
+          status: error.response?.status,
+        });
         useAuthStore.getState().logout();
         window.location.href = '/auth';
         return Promise.reject(refreshError);
       }
     }
+
+    logger.warn('api.nonfatal_failure', 'HTTP request failed', {
+      method: originalRequest?.method,
+      url: originalRequest?.url,
+      status: error.response?.status,
+      code: error.code,
+    }, {
+      clientRequestId: originalRequest?.headers?.['X-Client-Request-ID']?.toString(),
+    });
 
     return Promise.reject(error);
   }

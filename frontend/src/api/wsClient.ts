@@ -4,6 +4,7 @@ import { useSessionStore } from '../stores/sessionStore';
 import { useGameStore } from '../stores/gameStore';
 import { SessionSettings } from '../types/game';
 import { PlayerInList } from '../types/api';
+import { logger } from '../services/logger';
 
 /**
  * Синглтон WebSocket-клиента для игровой сессии.
@@ -248,7 +249,9 @@ class WsClient {
       try {
         const parsed = JSON.parse(e.data) as unknown;
         if (!isPayloadRecord(parsed) || typeof parsed.type !== 'string') {
-          console.warn('[wsClient] invalid message', parsed);
+          logger.warn('ws.invalid_message', 'WebSocket received invalid message payload', {
+            payload: parsed,
+          }, { sessionId });
           return;
         }
 
@@ -257,13 +260,17 @@ class WsClient {
           payload: parsed.payload,
         });
       } catch (err) {
-        console.warn('[wsClient] failed to parse message', err, e.data);
+        logger.warn('ws.parse_failed', 'Failed to parse WebSocket message', {
+          reason: err instanceof Error ? err.message : String(err),
+          raw: e.data,
+        }, { sessionId });
       }
     };
 
     this.socket.onopen = () => {
       this.reconnectAttempts = 0;
       this.startHeartbeat();
+      logger.info('ws.connected', 'WebSocket connected', { sessionId }, { sessionId });
       // Ре-синк состояния: после (re)connect дергаем /state, чтобы догнать
       // сообщения, которые backend мог отправить, пока сокет ещё не был в OPEN.
       const sid = this.currentSessionId;
@@ -271,8 +278,13 @@ class WsClient {
         useGameStore
           .getState()
           .loadState(sid)
+          .then(() => {
+            logger.info('ws.resync_completed', 'Game state resync completed', { sessionId: sid }, { sessionId: sid });
+          })
           .catch((err) => {
-            console.warn('[wsClient] state resync failed', err);
+            logger.warn('ws.state_resync_failed', 'Game state resync failed', {
+              reason: err instanceof Error ? err.message : String(err),
+            }, { sessionId: sid });
           });
       }
     };
@@ -280,7 +292,9 @@ class WsClient {
     this.socket.onclose = (e: CloseEvent) => this.handleClose(e);
 
     this.socket.onerror = (err: Event) => {
-      console.warn('[wsClient] socket error', err);
+      logger.warn('ws.socket_error', 'WebSocket reported an error event', {
+        type: err.type,
+      }, { sessionId });
     };
   }
 
@@ -311,7 +325,10 @@ class WsClient {
     if (handler) {
       handler(msg.payload);
     } else {
-      console.warn('[wsClient] unknown message type', msg.type, msg);
+      logger.warn('ws.invalid_message', 'WebSocket received unknown message type', {
+        type: msg.type,
+        payload: msg.payload,
+      }, { sessionId: this.currentSessionId });
     }
   }
 
@@ -322,7 +339,9 @@ class WsClient {
         try {
           this.socket.send(PING_MESSAGE);
         } catch (err) {
-          console.warn('[wsClient] heartbeat send failed', err);
+          logger.warn('ws.heartbeat_failed', 'WebSocket heartbeat send failed', {
+            reason: err instanceof Error ? err.message : String(err),
+          }, { sessionId: this.currentSessionId });
         }
       }
     }, 30_000);
@@ -356,6 +375,12 @@ class WsClient {
     // Экспоненциальный backoff: 500ms * 2^n, максимум 30s.
     const delay = Math.min(30_000, 500 * Math.pow(2, this.reconnectAttempts));
     this.reconnectAttempts += 1;
+    logger.warn('ws.reconnect_scheduled', 'Scheduling WebSocket reconnect', {
+      code: e.code,
+      reason: e.reason,
+      delay,
+      attempt: this.reconnectAttempts,
+    }, { sessionId });
 
     // Сбрасываем ссылку на мёртвый сокет, чтобы connect() мог создать новый.
     this.socket = null;

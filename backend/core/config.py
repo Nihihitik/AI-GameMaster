@@ -39,6 +39,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    APP_ENV: str = Field(default="development")
+    LOG_LEVEL: str = Field(default="DEBUG")
     DATABASE_URL: str = Field(
         default="postgresql+asyncpg://postgres:postgres@localhost:5432/gamemaster"
     )
@@ -54,6 +56,8 @@ class Settings(BaseSettings):
 
     # Режим отладки (включает логирование SQL-запросов)
     DEBUG: bool = False
+    FRONTEND_LOG_INGEST_ENABLED: bool = True
+    FRONTEND_LOG_REMOTE_MIN_LEVEL: str = Field(default="info")
 
     @property
     def cors_origins(self) -> list[str]:

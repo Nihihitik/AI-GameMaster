@@ -8,6 +8,7 @@ import type {
 import { sessionApi } from '../api/sessionApi';
 import { useAuthStore } from './authStore';
 import { createDefaultSessionSettings } from '../utils/sessionDefaults';
+import { logger } from '../services/logger';
 
 export const MAX_PLAYERS = 12;
 export const MIN_PLAYERS = 5;
@@ -98,6 +99,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       isHost: currentUser ? detailData.host_user_id === currentUser.user_id : true,
       myPlayerId: myPlayer?.id ?? null,
     });
+    logger.info('session.create_success', 'Session created successfully', {
+      sessionId: detailData.id,
+      playerCount: detailData.player_count,
+    }, { sessionId: detailData.id });
     return session.code;
   },
 
@@ -117,6 +122,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       isHost: currentUser ? detailData.host_user_id === currentUser.user_id : false,
       myPlayerId: myPlayer?.id ?? joinData.player_id,
     });
+    logger.info('session.join_success', 'Joined session successfully', {
+      sessionId: detailData.id,
+      playerId: myPlayer?.id ?? joinData.player_id,
+    }, { sessionId: detailData.id });
   },
 
   loadByCode: async (code) => {
@@ -133,6 +142,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       isHost: currentUser ? detailData.host_user_id === currentUser.user_id : false,
       myPlayerId: myPlayer?.id ?? null,
     });
+    logger.info('session.load_success', 'Session state loaded', {
+      sessionId: detailData.id,
+    }, { sessionId: detailData.id });
   },
 
   setSettings: async (newSettings) => {
@@ -180,6 +192,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         },
       }));
     }
+    logger.info('session.settings_updated', 'Session settings updated on frontend', {
+      sessionId: state.session.id,
+      updatedFields: Object.keys(payload),
+    }, { sessionId: state.session.id });
   },
 
   upsertPlayer: (player) => {
@@ -236,9 +252,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       } else {
         await sessionApi.resume(sessionId);
       }
+      logger.info(paused ? 'game.pause_submit' : 'game.resume_submit', paused ? 'Pause requested' : 'Resume requested', {
+        sessionId,
+      }, { sessionId });
     } catch {
       // Если бек вернул ошибку (уже на паузе / не на паузе) — пробуем всё равно
       // синхронизировать локальное состояние через WS.
+      logger.warn('api.nonfatal_failure', 'Pause/resume request failed, waiting for WS sync', {
+        sessionId,
+        paused,
+      }, { sessionId });
     }
   },
 

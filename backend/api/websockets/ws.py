@@ -15,6 +15,7 @@ from jose import JWTError
 from sqlalchemy import select
 
 from core.database import async_session_factory
+from core.logging import log_event, log_exception, set_log_context
 from models.player import Player
 from services.auth_service import decode_access_token
 from services.ws_manager import ws_manager
@@ -35,20 +36,24 @@ async def websocket_endpoint(
     try:
         payload = decode_access_token(token)
     except JWTError:
+        log_event(logger, logging.WARNING, "ws.invalid_message", "WebSocket token decode failed", session_id=str(session_id))
         await websocket.close(code=4001)
         return
 
     try:
         user_id = uuid.UUID(payload["sub"])
     except Exception:
+        log_event(logger, logging.WARNING, "ws.invalid_message", "WebSocket user id is invalid", session_id=str(session_id))
         await websocket.close(code=4001)
         return
+    set_log_context(session_id=str(session_id), user_id=str(user_id), source="backend")
 
     async with async_session_factory() as db:
         player = await db.scalar(
             select(Player.id).where(Player.session_id == session_id, Player.user_id == user_id)
         )
     if not player:
+        log_event(logger, logging.WARNING, "ws.invalid_message", "WebSocket connection rejected for non-player", session_id=str(session_id), user_id=str(user_id))
         await websocket.close(code=4003)
         return
 
@@ -59,9 +64,11 @@ async def websocket_endpoint(
             data = await websocket.receive_json()
             if data.get("type") == "ping":
                 await websocket.send_json(_PONG_RESPONSE)
+            elif data.get("type") not in {"ping"}:
+                log_event(logger, logging.WARNING, "ws.invalid_message", "Unexpected inbound websocket message", session_id=str(session_id), user_id=str(user_id), payload=data)
     except WebSocketDisconnect:
         pass
     except Exception:
-        logger.warning("ws error session=%s user=%s", session_id, user_id, exc_info=True)
+        log_exception(logger, "ws.loop_failed", "WebSocket loop failed", session_id=str(session_id), user_id=str(user_id))
     finally:
         await ws_manager.disconnect(session_id, user_id)

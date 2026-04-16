@@ -7,7 +7,9 @@ import StorySelectionPage from './pages/StorySelectionPage';
 import GamePage from './pages/GamePage';
 import ProfilePage from './pages/ProfilePage';
 import Loader from './components/ui/Loader';
+import AppErrorBoundary from './components/app/AppErrorBoundary';
 import { useAuthStore } from './stores/authStore';
+import { logger } from './services/logger';
 import './App.scss';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -37,7 +39,11 @@ function AppBootstrap() {
   const isInitializing = useAuthStore((s) => s.isInitializing);
 
   useEffect(() => {
-    initialize();
+    initialize().catch((error) => {
+      logger.error('app.bootstrap_failed', 'App bootstrap initialization failed', {
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    });
   }, [initialize]);
 
   if (isInitializing) {
@@ -48,7 +54,11 @@ function AppBootstrap() {
     );
   }
 
-  return <RouterProvider router={router} />;
+  return (
+    <AppErrorBoundary>
+      <RouterProvider router={router} />
+    </AppErrorBoundary>
+  );
 }
 
 function App() {

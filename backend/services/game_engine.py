@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import uuid
 
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from core.exceptions import GameError
+from core.logging import log_event
 from core.utils import utc_now
 from models.game_event import GameEvent
 from models.game_phase import GamePhase
@@ -43,6 +45,8 @@ from services.narration_script import (
 from services.timer_service import timer_service
 from services.runtime_state import runtime_state
 from services.ws_manager import ws_manager
+
+logger = logging.getLogger(__name__)
 
 
 def _role_config(session: Session) -> dict:
@@ -106,6 +110,16 @@ async def _emit_phase_changed(
     await _set_runtime_announcement(session_id, announcement if announcement and announcement.get("blocking", True) else None)
     if persist and db is not None and phase_id is not None:
         await _persist_phase_changed(db, session_id, phase_id, payload)
+    log_event(
+        logger,
+        logging.INFO,
+        "phase.changed",
+        "Game phase changed",
+        session_id=str(session_id),
+        phase=payload.get("phase"),
+        sub_phase=payload.get("sub_phase"),
+        night_turn=payload.get("night_turn"),
+    )
     await ws_manager.send_to_session(session_id, {"type": "phase_changed", "payload": payload})
 
 
@@ -257,6 +271,14 @@ async def start_game(db: AsyncSession, session: Session) -> None:
         )
     )
     await db.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "game.started",
+        "Game start persisted",
+        session_id=str(session.id),
+        player_count=len(players),
+    )
 
     timer_seconds = int((session.settings or {}).get("role_reveal_timer_seconds") or 15)
     rt = runtime_state.get(session.id)
@@ -376,6 +398,16 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
         # acknowledge_role завершился моментально, а не держал соединение
         # до конца первой ночи (execute_night_sequence делает долгий await-loop).
         asyncio.create_task(transition_to_night(session.id, 1))
+    log_event(
+        logger,
+        logging.INFO,
+        "game.role_acknowledged",
+        "Role acknowledgement persisted",
+        session_id=str(session.id),
+        player_id=str(player.id),
+        acknowledged=acked,
+        total=alive_total,
+    )
 
     return {"acknowledged": True, "players_acknowledged": acked, "players_total": alive_total}
 
@@ -494,6 +526,14 @@ async def transition_to_night(session_id: uuid.UUID, phase_number: int):
                     return
             finally:
                 rt.night_sequence_running = False
+            log_event(
+                logger,
+                logging.INFO,
+                "phase.changed",
+                "Transitioned to night phase",
+                session_id=str(session_id),
+                phase={"type": "night", "number": phase_number},
+            )
     finally:
         _end_phase_transition(session_id)
 
@@ -1093,6 +1133,15 @@ async def transition_to_day(session_id: uuid.UUID, phase_number: int):
                 await transition_to_voting(session_id)
 
             await timer_service.start_timer(session_id, "discussion", discussion_seconds, _to_voting)
+            log_event(
+                logger,
+                logging.INFO,
+                "phase.changed",
+                "Transitioned to day discussion",
+                session_id=str(session_id),
+                phase={"type": "day", "number": phase_number},
+                sub_phase="discussion",
+            )
     finally:
         _end_phase_transition(session_id)
 
@@ -1222,6 +1271,16 @@ async def transition_to_voting(
                 await resolve_votes(session_id)
 
             await timer_service.start_timer(session_id, "voting", voting_seconds, _resolve)
+            log_event(
+                logger,
+                logging.INFO,
+                "phase.changed",
+                "Transitioned to day voting",
+                session_id=str(session_id),
+                phase={"type": "day", "number": phase.phase_number},
+                sub_phase="voting",
+                vote_round=round_number,
+            )
     finally:
         _end_phase_transition(session_id)
 
@@ -1308,6 +1367,14 @@ async def resolve_votes(session_id: uuid.UUID):
                     candidate_ids=tied_ids,
                     round_number=2,
                 )
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "game.vote_tie",
+                    "Vote ended with tie, revote scheduled",
+                    session_id=str(session_id),
+                    candidate_ids=[str(item) for item in tied_ids],
+                )
                 return
 
             eliminated_player = await db.get(Player, eliminated_id) if eliminated_id else None
@@ -1380,6 +1447,15 @@ async def resolve_votes(session_id: uuid.UUID):
                     eliminated_name=(eliminated_player.name if eliminated_player else None),
                 )
                 return
+            log_event(
+                logger,
+                logging.INFO,
+                "vote.resolved",
+                "Votes resolved",
+                session_id=str(session_id),
+                eliminated_player_id=str(eliminated_id) if eliminated_id else None,
+                vote_round=rt.vote_round,
+            )
 
             if vote_steps:
                 await _wait_or_pause(session_id, (vote_steps[0].get("duration_ms") or 0) / 1000)
@@ -1413,6 +1489,14 @@ async def apply_host_kick(db: AsyncSession, session: Session, kicked: Player) ->
         )
     )
     await db.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "session.player_kicked",
+        "Host kick applied to runtime session",
+        session_id=str(session.id),
+        player_id=str(kicked.id),
+    )
 
     if phase and phase.phase_type == "night":
         request_night_abort(session.id)
@@ -1502,6 +1586,14 @@ async def finish_game(
         )
     )
     await db.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "game.finished",
+        "Game finished",
+        session_id=str(session.id),
+        winner=winner,
+    )
 
     await ws_manager.send_to_session(
         session.id,

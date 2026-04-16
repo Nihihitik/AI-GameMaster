@@ -10,11 +10,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 
 from sqlalchemy import select
 
 from core.database import async_session_factory
+from core.logging import log_event, log_exception
 from core.utils import remaining_seconds
 from models.game_phase import GamePhase
 from models.session import Session
@@ -30,6 +32,8 @@ from services.runtime_state import runtime_state
 from services.state_service import get_last_known_phase, restore_runtime_like_fields
 from services.timer_service import timer_service
 
+logger = logging.getLogger(__name__)
+
 
 async def _recover_one_session(session_id: uuid.UUID) -> None:
     # Важно: recovery может запускать фоновые задачи.
@@ -37,19 +41,24 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
     async with async_session_factory() as db:
         session = await db.get(Session, session_id)
         if not session or session.status != "active":
+            log_event(logger, logging.WARNING, "recovery.skipped", "Recovery skipped for inactive session", session_id=str(session_id))
             return
         gp = (session.settings or {}).get("game_pause")
         if isinstance(gp, dict) and gp.get("paused"):
+            log_event(logger, logging.WARNING, "recovery.skipped", "Recovery skipped for paused session", session_id=str(session_id))
             return
         rt = runtime_state.get(session_id)
         if rt.phase_transition_running or rt.night_sequence_running:
+            log_event(logger, logging.WARNING, "recovery.skipped", "Recovery skipped for busy runtime", session_id=str(session_id))
             return
         phase = await get_current_phase(db, session_id)
         if not phase:
             latest_phase = await get_last_known_phase(db, session_id)
             if not latest_phase:
+                log_event(logger, logging.WARNING, "recovery.skipped", "Recovery skipped because phase history is missing", session_id=str(session_id))
                 return
             await _recover_missing_phase(session_id, latest_phase)
+            log_event(logger, logging.INFO, "recovery.session_restored", "Recovered missing phase", session_id=str(session_id))
             return
 
         restored = await restore_runtime_like_fields(db, session_id, phase)
@@ -66,9 +75,11 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
             seconds = remaining if remaining is not None else int((session.settings or {}).get("role_reveal_timer_seconds") or 15)
             if seconds <= 0:
                 await transition_to_night(session_id, 1)
+                log_event(logger, logging.INFO, "recovery.session_restored", "Recovered role reveal timeout", session_id=str(session_id))
                 return
             if not timer_service.has_timer(session_id, "role_reveal"):
                 await timer_service.start_timer(session_id, "role_reveal", seconds, lambda: transition_to_night(session_id, 1))
+                log_event(logger, logging.INFO, "recovery.session_restored", "Recovered role reveal timer", session_id=str(session_id))
             return
 
         # day timers
@@ -77,20 +88,25 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
                 seconds = remaining if remaining is not None else int((session.settings or {}).get("discussion_timer_seconds") or 120)
                 if seconds <= 0:
                     await transition_to_voting(session_id)
+                    log_event(logger, logging.INFO, "recovery.session_restored", "Recovered discussion timeout", session_id=str(session_id))
                     return
                 if not timer_service.has_timer(session_id, "discussion"):
                     await timer_service.start_timer(session_id, "discussion", seconds, lambda: transition_to_voting(session_id))
+                    log_event(logger, logging.INFO, "recovery.session_restored", "Recovered discussion timer", session_id=str(session_id))
                 return
             if rt.day_sub_phase == "voting":
                 seconds = remaining if remaining is not None else int((session.settings or {}).get("voting_timer_seconds") or 60)
                 if seconds <= 0:
                     await resolve_votes(session_id)
+                    log_event(logger, logging.INFO, "recovery.session_restored", "Recovered voting timeout", session_id=str(session_id))
                     return
                 if not timer_service.has_timer(session_id, "voting"):
                     await timer_service.start_timer(session_id, "voting", seconds, lambda: resolve_votes(session_id))
+                    log_event(logger, logging.INFO, "recovery.session_restored", "Recovered voting timer", session_id=str(session_id))
                 return
             # если подфаза потеряна — безопасно считаем discussion
             await transition_to_voting(session_id)
+            log_event(logger, logging.INFO, "recovery.session_restored", "Recovered missing day sub-phase", session_id=str(session_id))
             return
 
         # night: возобновить последовательность
@@ -109,6 +125,7 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
                                 seconds_for_turn = remaining if remaining is not None and remaining > 0 else int((s2.settings or {}).get("night_action_timer_seconds") or 30)
                                 resume_from = (rt.night_turn, max(1, seconds_for_turn))
                             await execute_night_sequence(db2, s2, p2, resume_from=resume_from)
+                            log_event(logger, logging.INFO, "recovery.session_restored", "Recovered night sequence", session_id=str(session_id))
                 finally:
                     rt.night_sequence_running = False
 
@@ -155,5 +172,5 @@ async def recovery_loop(poll_seconds: int = 3) -> None:
                 await _recover_one_session(sid)
         except Exception:
             # не заваливаем сервер — recovery должен быть "best effort"
-            pass
+            log_exception(logger, "recovery.loop_failed", "Recovery loop failed")
         await asyncio.sleep(poll_seconds)

@@ -4,6 +4,7 @@ import Button, { LinkButton } from '../ui/Button';
 import { authApi } from '../../api/authApi';
 import { useAuthStore } from '../../stores/authStore';
 import { getApiErrorMessage } from '../../utils/getApiErrorMessage';
+import { logger } from '../../services/logger';
 
 interface RegisterFormProps {
   onToggle: () => void;
@@ -107,6 +108,7 @@ export default function RegisterForm({ onToggle }: RegisterFormProps) {
 
     setServerError(null);
     setLoading(true);
+    logger.info('auth.register_submit', 'Submitting registration form');
 
     try {
       const { data } = await authApi.register({
@@ -122,8 +124,14 @@ export default function RegisterForm({ onToggle }: RegisterFormProps) {
         has_pro: false,
         created_at: new Date().toISOString(),
       });
+      logger.info('auth.register_success', 'Registration succeeded', {
+        userId: data.user_id,
+      }, { userId: data.user_id });
       // AuthPage will handle redirect
     } catch (err) {
+      logger.warn('api.nonfatal_failure', 'Registration failed', {
+        reason: err instanceof Error ? err.message : String(err),
+      });
       setServerError(getApiErrorMessage(err));
     } finally {
       setLoading(false);

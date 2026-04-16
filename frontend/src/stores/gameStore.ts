@@ -3,6 +3,7 @@ import { Role, Player, Target, Announcement, VoteInfo, GameResult, Phase, Sessio
 import type { AcknowledgeRoleResponse, GameStateResponse, NightActionCheckResult } from '../types/api';
 import { gameApi } from '../api/gameApi';
 import { useSessionStore } from './sessionStore';
+import { logger } from '../services/logger';
 
 export type GameScreen =
   | 'syncing'
@@ -434,6 +435,11 @@ export const useGameStore = create<GameState>((set, get) => ({
         currentAnnouncement: nextAnnouncement,
       };
     });
+    logger.info('game.state_load', 'Game state loaded', {
+      sessionId,
+      phaseType: phase?.type ?? null,
+      phaseNumber: phase?.number ?? null,
+    }, { sessionId });
   },
 
   submitNightAction: async (targetId) => {
@@ -448,6 +454,11 @@ export const useGameStore = create<GameState>((set, get) => ({
       const entry = buildCheckResultEntry(targetId, state.actionType, data.check_result);
       set((s) => ({ checkResults: [...s.checkResults, entry] }));
     }
+    logger.info('game.night_action_submit', 'Night action submitted', {
+      sessionId: state.sessionId,
+      actionType: state.actionType,
+      targetId,
+    }, { sessionId: state.sessionId });
   },
 
   submitVote: async (targetId) => {
@@ -455,6 +466,10 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (!state.sessionId) return;
     await gameApi.vote(state.sessionId, targetId);
     set({ voteSubmitted: true, voteTarget: targetId });
+    logger.info('game.vote_submit', 'Vote submitted', {
+      sessionId: state.sessionId,
+      targetId,
+    }, { sessionId: state.sessionId });
   },
 
   acknowledgeRole: async () => {
@@ -470,9 +485,17 @@ export const useGameStore = create<GameState>((set, get) => ({
         ...(acked != null ? { acknowledgedCount: Number(acked) } : {}),
         ...(total != null ? { totalPlayers: Number(total) } : {}),
       });
+      logger.info('game.role_acknowledged', 'Role acknowledged by local player', {
+        sessionId: state.sessionId,
+        acknowledgedCount: acked ?? null,
+        totalPlayers: total ?? null,
+      }, { sessionId: state.sessionId });
     } catch {
       // Swallow — the local ack flag still flips so the user is not stuck.
       set({ acknowledged: true });
+      logger.warn('api.nonfatal_failure', 'Role acknowledgement request failed, local state updated optimistically', {
+        sessionId: state.sessionId,
+      }, { sessionId: state.sessionId });
     }
   },
 
@@ -813,6 +836,10 @@ export const useGameStore = create<GameState>((set, get) => ({
       players: roster,
     };
     set({ result, screen: 'finale', currentAnnouncement: null });
+    logger.info('game.result_received', 'Game result received', {
+      sessionId: get().sessionId,
+      winner,
+    }, { sessionId: get().sessionId });
   },
 
   reset: () => set({ ...initialState }),

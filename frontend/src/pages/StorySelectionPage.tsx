@@ -7,6 +7,8 @@ import PauseButton from '../components/game/PauseButton';
 import { useSessionStore } from '../stores/sessionStore';
 import { mockStories } from '../mocks/sessionMocks';
 import { useCountdown } from '../hooks/useCountdown';
+import { logger } from '../services/logger';
+import { usePageViewLogger } from '../hooks/usePageViewLogger';
 import './StorySelectionPage.scss';
 
 type Phase = 'voting' | 'waiting' | 'revealing' | 'done';
@@ -26,6 +28,7 @@ export default function StorySelectionPage() {
   const setSelectedStory = useSessionStore((s) => s.setSelectedStory);
 
   const total = players.length || 8;
+  usePageViewLogger('StorySelectionPage', { sessionId: session?.id ?? null });
   const hasAutoConfirmedRef = useRef(false);
   const timeLeft = useCountdown({
     enabled: phase === 'voting',
@@ -136,6 +139,10 @@ export default function StorySelectionPage() {
   const handleConfirmVote = () => {
     if (phase !== 'voting') return;
     const myVote = selectedId;
+    logger.info('story.vote_submit', 'Story vote submitted', {
+      sessionId: session?.id,
+      selectedId: myVote,
+    }, { sessionId: session?.id });
     if (myVote) {
       setVotes((prev) => ({ ...prev, [myVote]: (prev[myVote] || 0) + 1 }));
     }
@@ -146,6 +153,10 @@ export default function StorySelectionPage() {
   const handleContinue = () => {
     if (winnerStory) {
       setSelectedStory(winnerStory.id);
+      logger.info('story.selection_completed', 'Story selection completed', {
+        sessionId: session?.id,
+        storyId: winnerStory.id,
+      }, { sessionId: session?.id });
     }
     if (session?.id) {
       navigate(`/game/${session.id}`);

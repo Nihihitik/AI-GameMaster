@@ -5,6 +5,7 @@ import RegisterForm from '../components/auth/RegisterForm';
 import MatrixBackground from '../components/ui/MatrixBackground';
 import { useAuthStore } from '../stores/authStore';
 import authHeroImage from '../assets/auth-hero.jpg';
+import { usePageViewLogger } from '../hooks/usePageViewLogger';
 import './AuthPage.scss';
 
 export default function AuthPage() {
@@ -13,6 +14,7 @@ export default function AuthPage() {
   
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const navigate = useNavigate();
+  usePageViewLogger('AuthPage', { mode });
 
   useEffect(() => {
     if (isAuthenticated) {

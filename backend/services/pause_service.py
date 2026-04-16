@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import async_session_factory
 from core.exceptions import GameError
+from core.logging import log_event
 from core.utils import remaining_seconds, safe_uuid, utc_now
 from models.game_phase import GamePhase
 from models.session import Session
@@ -17,6 +19,7 @@ from services.timer_service import timer_service
 from services.ws_manager import ws_manager
 
 PAUSE_KEY = "game_pause"
+logger = logging.getLogger(__name__)
 
 
 async def pause_game(db: AsyncSession, session: Session) -> dict:
@@ -59,6 +62,7 @@ async def pause_game(db: AsyncSession, session: Session) -> dict:
     settings = {**cur, PAUSE_KEY: {"paused": True, "snapshot": snap}}
     session.settings = settings
     await db.commit()
+    log_event(logger, logging.INFO, "game.paused", "Pause snapshot persisted", session_id=str(session.id))
 
     await ws_manager.send_to_session(
         session.id,
@@ -139,6 +143,7 @@ async def resume_game(session_id: uuid.UUID) -> None:
                 },
             },
         )
+        log_event(logger, logging.INFO, "game.resumed", "Role reveal resumed from pause", session_id=str(session_id))
         return
 
     if ptype == "day":
@@ -173,6 +178,7 @@ async def resume_game(session_id: uuid.UUID) -> None:
                 },
             },
         )
+        log_event(logger, logging.INFO, "game.resumed", "Day phase resumed from pause", session_id=str(session_id))
         return
 
     if ptype == "night":
@@ -197,6 +203,7 @@ async def resume_game(session_id: uuid.UUID) -> None:
             ph2 = await db2.get(GamePhase, phase_id_uuid)
             if not s2 or not ph2:
                 return
+            log_event(logger, logging.INFO, "game.resumed", "Night phase resumed from pause", session_id=str(session_id))
             await execute_night_sequence(db2, s2, ph2, resume_from=(nt, rem))
         return
 

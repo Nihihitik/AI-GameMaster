@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends
@@ -11,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from api.deps import get_current_user, get_db, has_active_pro
 from core.exceptions import GameError
+from core.logging import log_event, set_log_context
 from models.game_event import GameEvent
 from models.player import Player
 from models.session import Session
@@ -27,6 +29,7 @@ from services.ws_manager import ws_manager
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("", response_model=SessionResponse, status_code=201)
@@ -86,6 +89,16 @@ async def create_session(
         )
     )
     await db.commit()
+    set_log_context(session_id=str(session.id), user_id=str(current_user.id))
+    log_event(
+        logger,
+        logging.INFO,
+        "session.created",
+        "Session created",
+        session_id=str(session.id),
+        user_id=str(current_user.id),
+        player_count=session.player_count,
+    )
 
     return SessionResponse(
         id=str(session.id),
@@ -200,6 +213,16 @@ async def join_session(
         )
     )
     await db.commit()
+    set_log_context(session_id=str(session.id), user_id=str(current_user.id))
+    log_event(
+        logger,
+        logging.INFO,
+        "session.joined",
+        "Player joined session",
+        session_id=str(session.id),
+        user_id=str(current_user.id),
+        player_id=str(player.id),
+    )
 
     await ws_manager.send_to_session(
         session.id,
@@ -214,4 +237,3 @@ async def join_session(
         },
     )
     return JoinResponse(player_id=str(player.id), session_id=str(session.id), join_order=join_order)
-

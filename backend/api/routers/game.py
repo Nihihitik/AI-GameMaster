@@ -6,6 +6,7 @@ WebSocket используется только для push-уведомлени
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user, get_db, get_player_or_404, get_session_or_404, require_host
 from core.exceptions import GameError
+from core.logging import log_event, set_log_context
 from core.utils import session_is_paused
 from models.day_vote import DayVote
 from models.game_event import GameEvent
@@ -32,6 +34,7 @@ from services.state_service import get_last_known_phase, restore_runtime_like_fi
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/{session_id}/start")
@@ -42,8 +45,10 @@ async def start(
 ):
     session = await get_session_or_404(db, session_id)
     require_host(session, current_user.id)
+    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
 
     await start_game(db, session)
+    log_event(logger, logging.INFO, "game.started", "Game started", session_id=str(session_id), user_id=str(current_user.id))
     return {"status": "active", "phase": {"type": "role_reveal", "number": 0}}
 
 
@@ -54,6 +59,7 @@ async def ack_role(
     db: AsyncSession = Depends(get_db),
 ):
     session = await get_session_or_404(db, session_id)
+    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
     if session_is_paused(session.settings):
         raise GameError(403, "game_paused", "Игра на паузе")
     if session.status != "active":
@@ -61,7 +67,17 @@ async def ack_role(
 
     player = await get_player_or_404(db, session_id, current_user.id)
 
-    return await acknowledge_role(db, session, player)
+    result = await acknowledge_role(db, session, player)
+    log_event(
+        logger,
+        logging.INFO,
+        "game.role_acknowledged",
+        "Player acknowledged role",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+        player_id=str(player.id),
+    )
+    return result
 
 
 @router.post("/{session_id}/night-action")
@@ -72,6 +88,7 @@ async def night_action(
     db: AsyncSession = Depends(get_db),
 ):
     session = await get_session_or_404(db, session_id)
+    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
     if session_is_paused(session.settings):
         raise GameError(403, "game_paused", "Игра на паузе")
 
@@ -202,6 +219,17 @@ async def night_action(
     )
     db.add(na)
     await db.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "night.action_submitted",
+        "Night action submitted",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+        player_id=str(player.id),
+        action_type=action_type,
+        target_player_id=str(target.id),
+    )
 
     # WS подтверждение
     await ws_manager.send_to_user(
@@ -245,6 +273,7 @@ async def vote(
     db: AsyncSession = Depends(get_db),
 ):
     session = await get_session_or_404(db, session_id)
+    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
     if session_is_paused(session.settings):
         raise GameError(403, "game_paused", "Игра на паузе")
     player = await get_player_or_404(db, session_id, current_user.id)
@@ -284,6 +313,16 @@ async def vote(
     dv = DayVote(id=uuid.uuid4(), phase_id=phase.id, voter_player_id=player.id, target_player_id=target_uuid)
     db.add(dv)
     await db.commit()
+    log_event(
+        logger,
+        logging.INFO,
+        "vote.submitted",
+        "Vote submitted",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+        player_id=str(player.id),
+        target_player_id=str(target_uuid) if target_uuid else None,
+    )
 
     # ws vote_update
     votes_cast = await db.scalar(select(func.count(DayVote.id)).where(DayVote.phase_id == phase.id))
@@ -308,6 +347,7 @@ async def state(
 ):
     session = await get_session_or_404(db, session_id)
     player = await get_player_or_404(db, session_id, current_user.id)
+    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
     if session.status == "waiting":
         raise GameError(403, "wrong_phase", "Игра ещё не началась")
 
@@ -321,6 +361,12 @@ async def state(
 
     restored = await restore_runtime_like_fields(db, session_id, phase)
     rt = runtime_state.get(session_id)
+    previous_runtime = {
+        "sub_phase": rt.day_sub_phase,
+        "night_turn": rt.night_turn,
+        "timer_name": rt.timer_name,
+        "timer_seconds": rt.timer_seconds,
+    }
     # если runtime потерян (рестарт), используем восстановленные значения
     if restored["sub_phase"] is not None:
         rt.day_sub_phase = restored["sub_phase"]
@@ -337,6 +383,19 @@ async def state(
         rt.voting_candidate_ids = restored["candidate_ids"]
     if restored.get("announcement") is not None and rt.current_announcement is None:
         rt.current_announcement = restored["announcement"]
+    if any(
+        restored.get(key) is not None and restored.get(key) != previous_runtime.get(key)
+        for key in ("sub_phase", "night_turn", "timer_name", "timer_seconds")
+    ):
+        log_event(
+            logger,
+            logging.WARNING,
+            "runtime_state_mismatch",
+            "Runtime state restored from persisted events",
+            session_id=str(session_id),
+            user_id=str(current_user.id),
+            restored=restored,
+        )
 
     # роль игрока
     role = await db.get(Role, player.role_id) if player.role_id else None
