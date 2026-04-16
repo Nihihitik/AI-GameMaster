@@ -5,12 +5,17 @@ import { LogFilters } from "@/components/logs/log-filters";
 import { LogList } from "@/components/logs/log-list";
 import { useLogStream } from "@/hooks/use-log-stream";
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
+import { loadAutoScroll, saveAutoScroll } from "@/lib/state/filter-store";
 import type { LogSource } from "@/lib/logs/types";
 
 export function LogViewer({ source }: { source: LogSource }) {
   const reduceMotion = usePrefersReducedMotion();
   const stream = useLogStream(source);
-  const [autoScroll, setAutoScroll] = React.useState(true);
+  const [autoScroll, setAutoScrollRaw] = React.useState<boolean>(() => loadAutoScroll());
+  const setAutoScroll = React.useCallback((next: boolean) => {
+    setAutoScrollRaw(next);
+    saveAutoScroll(next);
+  }, []);
 
   const onApplyFilter = React.useCallback(
     (kind: "session" | "user" | "correlation", value: string) => {

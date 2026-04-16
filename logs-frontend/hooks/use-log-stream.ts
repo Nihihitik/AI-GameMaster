@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LogEntry, LogLevel, LogSource } from "@/lib/logs/types";
 import { timestampToMs } from "@/lib/utils/format-time";
+import { loadFilter, saveFilter } from "@/lib/state/filter-store";
 
 export type ConnectionState = "idle" | "connecting" | "open" | "error";
 
@@ -105,12 +106,25 @@ export function useLogStream(source: LogSource): UseLogStreamResult {
   const [status, setStatus] = useState<ConnectionState>("connecting");
   const [upstreamStatus, setUpstreamStatus] = useState<UpstreamStatus | null>(null);
   const [paused, setPaused] = useState(false);
-  const [filter, setFilter] = useState<LogFilter>(DEFAULT_FILTER);
+  // Стартовое значение для filter — из sessionStorage (per source), чтобы выбор
+  // уровней / event-фильтров пережил переключение между Backend и Frontend.
+  const [filter, setFilterRaw] = useState<LogFilter>(() => loadFilter(source) ?? DEFAULT_FILTER);
   const [now, setNow] = useState(() => Date.now());
   const [rate, setRate] = useState(0);
   const [frozen, setFrozen] = useState<LogEntry[] | null>(null);
 
   const rateRef = useRef<RateState>({ timestamps: [] });
+
+  const setFilter = useCallback<UseLogStreamResult["setFilter"]>(
+    (next) => {
+      setFilterRaw((prev) => {
+        const value = typeof next === "function" ? (next as (p: LogFilter) => LogFilter)(prev) : next;
+        saveFilter(source, value);
+        return value;
+      });
+    },
+    [source],
+  );
 
   useEffect(() => {
     let cancelled = false;
