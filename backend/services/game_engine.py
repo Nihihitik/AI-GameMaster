@@ -276,13 +276,25 @@ async def start_game(db: AsyncSession, session: Session) -> None:
     )
 
     # Персонально роль (эфемерное)
-    for p in players:
-        r = role_by_slug[[s for s in role_by_slug if role_by_slug[s].id == p.role_id][0]]
-        await ws_manager.send_to_user(
+    role_by_id = {v.id: v for v in role_by_slug.values()}
+    await asyncio.gather(*(
+        ws_manager.send_to_user(
             session.id,
             p.user_id,
-            {"type": "role_assigned", "payload": {"role": {"slug": r.slug, "name": r.name, "team": r.team, "abilities": r.abilities}}},
+            {
+                "type": "role_assigned",
+                "payload": {
+                    "role": {
+                        "slug": role_by_id[p.role_id].slug,
+                        "name": role_by_id[p.role_id].name,
+                        "team": role_by_id[p.role_id].team,
+                        "abilities": role_by_id[p.role_id].abilities,
+                    }
+                },
+            },
         )
+        for p in players
+    ))
 
     async def _on_role_reveal_timeout():
         # Запускаем как отдельную фоновую задачу, чтобы не блокировать
@@ -960,14 +972,17 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
         session.id,
         {"type": "night_result", "payload": {**payload, "announcement": morning_steps[0] if morning_steps else None}},
         )
-        for dp in died_players:
-            await ws_manager.send_to_session(
-            session.id,
-            {
-                "type": "player_eliminated",
-                "payload": {"player_id": str(dp.id), "name": dp.name, "cause": "night"},
-            },
-        )
+        if died_players:
+            await asyncio.gather(*(
+                ws_manager.send_to_session(
+                    session.id,
+                    {
+                        "type": "player_eliminated",
+                        "payload": {"player_id": str(dp.id), "name": dp.name, "cause": "night"},
+                    },
+                )
+                for dp in died_players
+            ))
 
         if len(morning_steps) > 1:
             for announcement in morning_steps[1:]:
@@ -1170,7 +1185,9 @@ async def transition_to_voting(
             players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
             alive = [p for p in players if p.status == "alive"]
             alive_candidates = [p for p in alive if candidate_ids is None or p.id in candidate_ids]
-            for p in players:
+            timer_started_iso = rt.timer_started_at.isoformat()
+
+            async def _send_voting_phase(p):
                 is_alive = p.status == "alive"
                 is_blocked = rt.day_blocked_player is not None and p.id == rt.day_blocked_player
                 targets = (
@@ -1191,13 +1208,15 @@ async def transition_to_voting(
                             "phase": {"type": "day", "number": phase.phase_number},
                             "sub_phase": "voting",
                             "timer_seconds": voting_seconds,
-                            "timer_started_at": rt.timer_started_at.isoformat(),
+                            "timer_started_at": timer_started_iso,
                             "vote_round": round_number,
                             "awaiting_action": is_alive and not is_blocked,
                             "available_targets": targets,
                         },
                     },
                 )
+
+            await asyncio.gather(*(_send_voting_phase(p) for p in players))
 
             async def _resolve():
                 await resolve_votes(session_id)

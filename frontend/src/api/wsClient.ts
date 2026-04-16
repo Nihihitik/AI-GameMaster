@@ -21,6 +21,10 @@ import { PlayerInList } from '../types/api';
 type WsMessage = { type: string; payload?: unknown };
 type WsPayloadRecord = Record<string, unknown>;
 
+const PING_MESSAGE = JSON.stringify({ type: 'ping' });
+const NO_RECONNECT_CODES = new Set([4000, 4001, 4003]);
+const MAX_RECONNECT_ATTEMPTS = 15;
+
 function isPayloadRecord(payload: unknown): payload is WsPayloadRecord {
   return typeof payload === 'object' && payload !== null;
 }
@@ -36,23 +40,186 @@ function getPayloadString(payload: unknown, key: string): string | undefined {
 
 /** Локальный обработчик персонального кика: логаут не нужен, просто редирект и reset. */
 function handleKicked() {
-  // Отвязываем текущую сессию из сторов.
   try {
     useSessionStore.getState().reset();
   } catch {
     // ignore
   }
-  // Перенаправляем пользователя на главную.
   if (typeof window !== 'undefined') {
     window.location.href = '/';
   }
 }
+
+// ---------------------------------------------------------------------------
+// Handler map: каждый обработчик вызывает getState() только нужного стора.
+// ---------------------------------------------------------------------------
+
+const HANDLERS: Record<string, (payload: unknown) => void> = {
+  player_joined: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useSessionStore.getState().upsertPlayer(payload as unknown as PlayerInList);
+    }
+  },
+
+  player_left: (payload) => {
+    const playerId = getPayloadString(payload, 'player_id');
+    if (playerId) {
+      useSessionStore.getState().removePlayer(playerId);
+    }
+  },
+
+  player_kicked: (payload) => {
+    const playerId = getPayloadString(payload, 'player_id');
+    if (playerId) {
+      useSessionStore.getState().removePlayer(playerId);
+    }
+  },
+
+  settings_updated: (payload) => {
+    const settings = isPayloadRecord(payload) && 'settings' in payload
+      ? payload.settings
+      : payload;
+    if (!isPayloadRecord(settings)) {
+      return;
+    }
+    const sessionStore = useSessionStore.getState();
+    if (typeof sessionStore.applySessionSettings === 'function') {
+      sessionStore.applySessionSettings(settings as unknown as SessionSettings);
+      return;
+    }
+    void sessionStore.setSettings(settings as Partial<SessionSettings>);
+  },
+
+  session_closed: () => {
+    useSessionStore.getState().reset?.();
+    if (typeof window !== 'undefined') {
+      window.location.href = '/';
+    }
+  },
+
+  kicked: () => handleKicked(),
+
+  game_started: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().onGameStarted(payload);
+    }
+  },
+
+  role_assigned: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().setMyRole(payload);
+    }
+  },
+
+  phase_changed: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().applyPhase(payload);
+    }
+  },
+
+  action_required: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().applyActionRequired(payload);
+    }
+  },
+
+  action_blocked: () => {
+    useGameStore.getState().applyActionBlocked();
+  },
+
+  action_timeout: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().applyActionTimeout(payload);
+    }
+  },
+
+  role_acknowledged: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().applyRoleAcknowledged(payload);
+    }
+  },
+
+  all_acknowledged: () => {
+    useGameStore.getState().applyAllAcknowledged();
+  },
+
+  night_result: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().applyNightResult(payload);
+    }
+  },
+
+  vote_update: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().setVoteCounts(payload);
+    }
+  },
+
+  vote_result: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().applyVoteResult(payload);
+    }
+  },
+
+  player_eliminated: (payload) => {
+    const playerId = getPayloadString(payload, 'player_id');
+    if (playerId) {
+      useGameStore.getState().markEliminated(playerId);
+    }
+  },
+
+  action_confirmed: () => {
+    useGameStore.getState().setActionSubmitted(true);
+  },
+
+  check_result: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().addCheckResult(payload);
+    }
+  },
+
+  announcement: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().queueAnnouncement(payload);
+    }
+  },
+
+  game_finished: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().setResult(payload);
+    }
+  },
+
+  game_paused: () => {
+    if (!useSessionStore.getState().timerPaused) {
+      useSessionStore.setState({ timerPaused: true });
+    }
+  },
+
+  game_resumed: (payload) => {
+    useSessionStore.setState({ timerPaused: false });
+    if (isPayloadRecord(payload)) {
+      useGameStore.getState().applyPhase(payload);
+    }
+  },
+
+  session_reset: (payload) => {
+    const code = getPayloadString(payload, 'session_code');
+    useGameStore.getState().reset();
+    if (code && typeof window !== 'undefined') {
+      window.location.href = `/lobby/${code}`;
+    }
+  },
+
+  pong: () => {},
+};
 
 class WsClient {
   private socket: WebSocket | null = null;
   private heartbeatId: number | null = null;
   private reconnectAttempts = 0;
   private currentSessionId: string | null = null;
+  private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   connect(sessionId: string): void {
     const token = useAuthStore.getState().accessToken;
@@ -119,6 +286,10 @@ class WsClient {
 
   disconnect(): void {
     this.stopHeartbeat();
+    if (this.reconnectTimeoutId !== null) {
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = null;
+    }
     if (this.socket) {
       try {
         this.socket.onclose = null;
@@ -136,169 +307,11 @@ class WsClient {
   }
 
   private dispatch(msg: WsMessage): void {
-    const sessionStore = useSessionStore.getState();
-    const gameStore = useGameStore.getState();
-
-    switch (msg.type) {
-      case 'player_joined':
-        if (isPayloadRecord(msg.payload)) {
-          return sessionStore.upsertPlayer(msg.payload as unknown as PlayerInList);
-        }
-        return;
-
-      case 'player_left':
-      case 'player_kicked': {
-        const playerId = getPayloadString(msg.payload, 'player_id');
-        if (playerId) {
-          return sessionStore.removePlayer(playerId);
-        }
-        return;
-      }
-
-      case 'settings_updated': {
-        // Hook: either applySessionSettings (preferred, local-only setter)
-        // or setSettings (may be an async API call in the current store).
-        const settings = isPayloadRecord(msg.payload) && 'settings' in msg.payload
-          ? msg.payload.settings
-          : msg.payload;
-        if (!isPayloadRecord(settings)) {
-          return;
-        }
-        if (typeof sessionStore.applySessionSettings === 'function') {
-          return sessionStore.applySessionSettings(settings as unknown as SessionSettings);
-        }
-        void sessionStore.setSettings(settings as Partial<SessionSettings>);
-        return;
-      }
-
-      case 'session_closed':
-        sessionStore.reset?.();
-        if (typeof window !== 'undefined') {
-          window.location.href = '/';
-        }
-        return;
-
-      case 'kicked':
-        return handleKicked();
-
-      case 'game_started':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.onGameStarted(msg.payload);
-        }
-        return;
-
-      case 'role_assigned':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.setMyRole(msg.payload);
-        }
-        return;
-
-      case 'phase_changed':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.applyPhase(msg.payload);
-        }
-        return;
-
-      case 'action_required':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.applyActionRequired(msg.payload);
-        }
-        return;
-
-      case 'action_blocked':
-        return gameStore.applyActionBlocked();
-
-      case 'action_timeout':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.applyActionTimeout(msg.payload);
-        }
-        return;
-
-      case 'role_acknowledged':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.applyRoleAcknowledged(msg.payload);
-        }
-        return;
-
-      case 'all_acknowledged':
-        return gameStore.applyAllAcknowledged();
-
-      case 'night_result':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.applyNightResult(msg.payload);
-        }
-        return;
-
-      case 'vote_update':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.setVoteCounts(msg.payload);
-        }
-        return;
-
-      case 'vote_result':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.applyVoteResult(msg.payload);
-        }
-        return;
-
-      case 'player_eliminated':
-        {
-          const playerId = getPayloadString(msg.payload, 'player_id');
-          if (playerId) {
-            return gameStore.markEliminated(playerId);
-          }
-          return;
-        }
-
-      case 'action_confirmed':
-        return gameStore.setActionSubmitted(true);
-
-      case 'check_result':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.addCheckResult(msg.payload);
-        }
-        return;
-
-      case 'announcement':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.queueAnnouncement(msg.payload);
-        }
-        return;
-
-      case 'game_finished':
-        if (isPayloadRecord(msg.payload)) {
-          return gameStore.setResult(msg.payload);
-        }
-        return;
-
-      case 'game_paused':
-        sessionStore.timerPaused !== true && useSessionStore.setState({ timerPaused: true });
-        return;
-
-      case 'game_resumed':
-        useSessionStore.setState({ timerPaused: false });
-        // Update phase timer info so screens can sync the countdown.
-        if (isPayloadRecord(msg.payload)) {
-          gameStore.applyPhase(msg.payload);
-        }
-        return;
-
-      case 'session_reset': {
-        // Host reset game → all players go back to lobby.
-        const code = getPayloadString(msg.payload, 'session_code');
-        gameStore.reset();
-        if (code && typeof window !== 'undefined') {
-          window.location.href = `/lobby/${code}`;
-        }
-        return;
-      }
-
-      case 'pong':
-        // heartbeat reply — ничего не делаем
-        return;
-
-      default:
-        console.warn('[wsClient] unknown message type', msg.type, msg);
+    const handler = HANDLERS[msg.type];
+    if (handler) {
+      handler(msg.payload);
+    } else {
+      console.warn('[wsClient] unknown message type', msg.type, msg);
     }
   }
 
@@ -307,7 +320,7 @@ class WsClient {
     this.heartbeatId = window.setInterval(() => {
       if (this.socket?.readyState === WebSocket.OPEN) {
         try {
-          this.socket.send(JSON.stringify({ type: 'ping' }));
+          this.socket.send(PING_MESSAGE);
         } catch (err) {
           console.warn('[wsClient] heartbeat send failed', err);
         }
@@ -325,7 +338,7 @@ class WsClient {
   private handleClose(e: CloseEvent): void {
     this.stopHeartbeat();
     // 4000 (kick), 4001 (bad token), 4003 (not in session) — не переподключаемся.
-    if ([4000, 4001, 4003].includes(e.code)) {
+    if (NO_RECONNECT_CODES.has(e.code)) {
       this.socket = null;
       this.currentSessionId = null;
       return;
@@ -334,6 +347,12 @@ class WsClient {
     const sessionId = this.currentSessionId;
     if (!sessionId) return;
 
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      this.socket = null;
+      this.currentSessionId = null;
+      return;
+    }
+
     // Экспоненциальный backoff: 500ms * 2^n, максимум 30s.
     const delay = Math.min(30_000, 500 * Math.pow(2, this.reconnectAttempts));
     this.reconnectAttempts += 1;
@@ -341,7 +360,8 @@ class WsClient {
     // Сбрасываем ссылку на мёртвый сокет, чтобы connect() мог создать новый.
     this.socket = null;
 
-    window.setTimeout(() => {
+    this.reconnectTimeoutId = setTimeout(() => {
+      this.reconnectTimeoutId = null;
       // Проверяем, не был ли disconnect() вызван за это время.
       if (this.currentSessionId === sessionId) {
         this.connect(sessionId);

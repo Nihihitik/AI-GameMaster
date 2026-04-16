@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useGameStore, CheckResultEntry } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import PauseButton from './PauseButton';
@@ -63,8 +63,16 @@ export default function NightActionScreen() {
     });
   };
 
+  const checkResultMap = useMemo(() => {
+    const map = new Map<string, CheckResultEntry>();
+    for (const r of checkResults) {
+      map.set(r.targetId, r);
+    }
+    return map;
+  }, [checkResults]);
+
   const getTargetState = (targetId: string): 'default' | 'selected' | 'checked-mafia' | 'checked-city' | 'blocked' => {
-    const result = checkResults.find((r) => r.targetId === targetId);
+    const result = checkResultMap.get(targetId);
     if (result) {
       if (result.actionType === 'don_check') {
         return result.isSheriff ? 'checked-mafia' : 'checked-city';
@@ -77,7 +85,7 @@ export default function NightActionScreen() {
   };
 
   const isTargetDisabled = (targetId: string): boolean => {
-    const result = checkResults.find((r) => r.targetId === targetId);
+    const result = checkResultMap.get(targetId);
     if (result) {
       if (result.actionType === 'don_check' && !result.isSheriff) return true;
       if (result.team === 'city') return true;

@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
+import { Player } from '../../types/game';
 import PauseButton from './PauseButton';
 import { useCountdown } from '../../hooks/useCountdown';
 import './DayDiscussionScreen.scss';
@@ -27,8 +28,14 @@ export default function DayDiscussionScreen() {
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  const alivePlayers = players.filter((p) => p.status === 'alive');
-  const deadPlayers = players.filter((p) => p.status === 'dead');
+  const { alivePlayers, deadPlayers } = useMemo(() => {
+    const alive: Player[] = [];
+    const dead: Player[] = [];
+    for (const p of players) {
+      (p.status === 'alive' ? alive : dead).push(p);
+    }
+    return { alivePlayers: alive, deadPlayers: dead };
+  }, [players]);
 
   return (
     <div className="day-discussion">

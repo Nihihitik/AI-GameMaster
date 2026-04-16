@@ -71,6 +71,9 @@ async def test_send_to_session_handles_broken_ws(cm, sid):
 
     await cm.send_to_session(sid, {"type": "test"})
     ws2.send_json.assert_awaited_once()
+    # Stale connection should be auto-removed.
+    assert u1 not in cm._connections.get(sid, {})
+    assert u2 in cm._connections[sid]
 
 
 @pytest.mark.asyncio
@@ -121,6 +124,17 @@ async def test_close_session_all(cm, sid):
     ws1.close.assert_awaited_once_with(code=4002)
     ws2.close.assert_awaited_once_with(code=4002)
     assert sid not in cm._connections
+
+
+@pytest.mark.asyncio
+async def test_send_to_user_removes_stale(cm, sid):
+    uid = uuid.uuid4()
+    ws = _mock_ws()
+    ws.send_json.side_effect = RuntimeError("broken")
+    await cm.connect(sid, uid, ws)
+
+    await cm.send_to_user(sid, uid, {"type": "direct"})
+    assert uid not in cm._connections.get(sid, {})
 
 
 @pytest.mark.asyncio

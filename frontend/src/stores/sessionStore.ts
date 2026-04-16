@@ -53,6 +53,15 @@ interface SessionState {
   reset: () => void;
 }
 
+// Cached lazy import to break circular dependency with gameStore.
+let _gameStoreModule: typeof import('./gameStore') | null = null;
+async function getGameStore() {
+  if (!_gameStoreModule) {
+    _gameStoreModule = await import('./gameStore');
+  }
+  return _gameStoreModule;
+}
+
 function playersFromList(list: PlayerInList[]): LobbyPlayer[] {
   return list.map((p) => ({
     id: p.id,
@@ -218,8 +227,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const state = get();
     // sessionStore.session may be null after game page refresh;
     // fall back to gameStore.sessionId which is always set by loadState.
-    // Lazy import to avoid circular dependency with gameStore.
-    const { useGameStore: gStore } = await import('./gameStore');
+    const { useGameStore: gStore } = await getGameStore();
     const sessionId = state.session?.id ?? gStore.getState().sessionId;
     if (!sessionId) return;
     try {

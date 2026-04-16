@@ -480,10 +480,16 @@ export const useGameStore = create<GameState>((set, get) => ({
   setSessionId: (sessionId) => set({ sessionId }),
   setMyPlayerId: (myPlayerId) => set({ myPlayerId }),
   setPlayers: (players) => set({ players, totalPlayers: players.length }),
-  updatePlayerStatus: (playerId, status) => set((s) => ({
-    players: s.players.map((p) => p.id === playerId ? { ...p, status } : p),
-    myStatus: s.myPlayerId === playerId ? status : s.myStatus,
-  })),
+  updatePlayerStatus: (playerId, status) => set((s) => {
+    const idx = s.players.findIndex((p) => p.id === playerId);
+    if (idx === -1 || s.players[idx].status === status) return s;
+    const next = [...s.players];
+    next[idx] = { ...next[idx], status };
+    return {
+      players: next,
+      myStatus: s.myPlayerId === playerId ? status : s.myStatus,
+    };
+  }),
   setSelectedTarget: (selectedTarget) => set({ selectedTarget }),
   advanceNarrator: () => undefined,
 
@@ -663,30 +669,53 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   applyNightResult: (payload) => {
     const died: { player_id: string; name: string }[] = payload?.died ?? [];
-    const killedNames = died.map((d) => d.name).join(', ');
     const bpId = payload?.day_blocked_player ?? null;
     const announcement: Announcement | null = payload?.announcement ?? null;
+
+    if (died.length === 0) {
+      set((s) => {
+        const nextAnnouncement = resolveAnnouncement(s.currentAnnouncement, announcement);
+        const base = {
+          nightKills: [] as NightKill[],
+          nightResultDied: [] as { player_id: string; name: string }[],
+          nightResultText: '',
+          dayBlockedPlayer: bpId,
+          currentAnnouncement: nextAnnouncement,
+        };
+        return hasBlockingAnnouncement(nextAnnouncement)
+          ? { ...base, screen: 'narrator' as GameScreen }
+          : base;
+      });
+      return;
+    }
+
+    // Single pass: build Set + nightKills + names
+    const diedIds = new Set<string>();
+    const nightKills: NightKill[] = [];
+    const names: string[] = [];
+    for (const d of died) {
+      diedIds.add(d.player_id);
+      nightKills.push({ player_id: d.player_id, name: d.name });
+      names.push(d.name);
+    }
+    const killedNames = names.join(', ');
 
     set((s) => {
       const nextAnnouncement = resolveAnnouncement(s.currentAnnouncement, announcement);
       const base = {
-        nightKills: died.map((d) => ({ player_id: d.player_id, name: d.name })),
+        nightKills,
         nightResultDied: died,
         nightResultText: killedNames,
         dayBlockedPlayer: bpId,
         players: s.players.map((p) =>
-          died.some((d) => d.player_id === p.id) ? { ...p, status: 'dead' as const } : p
+          diedIds.has(p.id) ? { ...p, status: 'dead' as const } : p
         ),
-        myStatus: died.some((d) => d.player_id === s.myPlayerId) ? ('dead' as const) : s.myStatus,
+        myStatus: (s.myPlayerId && diedIds.has(s.myPlayerId)) ? ('dead' as const) : s.myStatus,
         currentAnnouncement: nextAnnouncement,
       };
-      if (hasBlockingAnnouncement(nextAnnouncement)) {
-        return {
-          ...base,
-          screen: 'narrator' as GameScreen,
-        };
-      }
-      return base;
+      return hasBlockingAnnouncement(nextAnnouncement)
+        ? { ...base, screen: 'narrator' as GameScreen }
+        : base;
     });
   },
 
@@ -709,31 +738,35 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     set((state) => {
       const nextAnnouncement = resolveAnnouncement(state.currentAnnouncement, announcement);
-      const base: Partial<GameState> = {};
+      const base: Partial<GameState> = { currentAnnouncement: nextAnnouncement };
+
       if (eliminatedId) {
-        base.players = state.players.map((p) =>
-          p.id === eliminatedId ? { ...p, status: 'dead' as const } : p
-        );
-        base.myStatus = state.myPlayerId === eliminatedId ? 'dead' : state.myStatus;
+        const idx = state.players.findIndex((p) => p.id === eliminatedId);
+        if (idx !== -1 && state.players[idx].status !== 'dead') {
+          const next = [...state.players];
+          next[idx] = { ...next[idx], status: 'dead' };
+          base.players = next;
+          base.myStatus = state.myPlayerId === eliminatedId ? 'dead' : state.myStatus;
+        }
       }
-      base.currentAnnouncement = nextAnnouncement;
-      if (hasBlockingAnnouncement(nextAnnouncement)) {
-        return {
-          ...base,
-          screen: 'narrator' as GameScreen,
-        };
-      }
-      return base;
+
+      return hasBlockingAnnouncement(nextAnnouncement)
+        ? { ...base, screen: 'narrator' as GameScreen }
+        : base;
     });
   },
 
   markEliminated: (playerId) => {
-    set((state) => ({
-      players: state.players.map((p) =>
-        p.id === playerId ? { ...p, status: 'dead' as const } : p
-      ),
-      myStatus: state.myPlayerId === playerId ? 'dead' : state.myStatus,
-    }));
+    set((state) => {
+      const idx = state.players.findIndex((p) => p.id === playerId);
+      if (idx === -1 || state.players[idx].status === 'dead') return state;
+      const next = [...state.players];
+      next[idx] = { ...next[idx], status: 'dead' };
+      return {
+        players: next,
+        myStatus: state.myPlayerId === playerId ? 'dead' : state.myStatus,
+      };
+    });
   },
 
   setActionSubmitted: (value) => set({ actionSubmitted: value }),
