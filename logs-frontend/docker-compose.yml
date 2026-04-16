@@ -14,6 +14,13 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: "3000"
       NODE_ENV: development
+      # Имя контейнера backend, чьи stdout-логи читаем через docker.sock
+      LOGS_BACKEND_CONTAINER: gamemaster-backend
+      # URL backend API для dashboard observability эндпоинтов.
+      # host.docker.internal — backend в соседнем compose, не в этой сети.
+      BACKEND_API_URL: http://host.docker.internal:8000
+      # Регулярка имён контейнеров для статистики (по умолчанию gamemaster-*)
+      LOGS_CONTAINER_PATTERN: ^gamemaster-
     # Хост-порт 3100, чтобы не конфликтовать с основным фронтом на 3000
     ports:
       - "3100:3000"
@@ -23,5 +30,11 @@ services:
       - .:/app
       - /app/node_modules
       - /app/.next
+      # docker.sock хоста — читаем логи соседних контейнеров через Docker Engine API.
+      # Только для dev: монтирование сокета даёт root-эквивалент на хосте.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # host.docker.internal на Linux требует явный mapping; на macOS работает по умолчанию.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     stdin_open: true
     tty: true

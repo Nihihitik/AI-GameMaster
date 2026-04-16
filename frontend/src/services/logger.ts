@@ -2,9 +2,11 @@ import {
   API_BASE_URL,
   APP_ENV,
   CLIENT_LOG_LEVEL,
+  LOG_CAPTURE_CONSOLE,
   REMOTE_LOGS_ENABLED,
   REMOTE_LOG_MIN_LEVEL,
 } from '../utils/constants';
+import { redactValue } from './logRedaction';
 
 export type FrontendLogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -42,6 +44,16 @@ const ringBuffer: FrontendLogEvent[] = [];
 
 let flushTimer: number | null = null;
 let globalHandlersInstalled = false;
+let consoleBridgeInstalled = false;
+let inEmit = false;
+
+const nativeConsole = {
+  log: console.log.bind(console),
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+  debug: console.debug.bind(console),
+};
 
 function normalizeLevel(value: string): FrontendLogLevel {
   const normalized = value.trim().toLowerCase();
@@ -60,7 +72,7 @@ function shouldPrint(level: FrontendLogLevel): boolean {
 }
 
 function shouldShip(level: FrontendLogLevel): boolean {
-  return REMOTE_LOGS_ENABLED && level !== 'debug' && levelOrder[level] >= levelOrder[remoteMinLevel];
+  return REMOTE_LOGS_ENABLED && levelOrder[level] >= levelOrder[remoteMinLevel];
 }
 
 function nextId(prefix: string): string {
@@ -137,10 +149,10 @@ function printToConsole(event: FrontendLogEvent): void {
   }
 
   const printer = event.level === 'error'
-    ? console.error
+    ? nativeConsole.error
     : event.level === 'warn'
-      ? console.warn
-      : console.log;
+      ? nativeConsole.warn
+      : nativeConsole.log;
   printer(`[${event.level}] ${event.event}`, {
     message: event.message,
     context: event.context,
@@ -181,7 +193,7 @@ async function flushRemoteLogs(): Promise<void> {
     });
   } catch (error) {
     if (isDev()) {
-      console.warn('[logger] remote flush failed', error);
+      nativeConsole.warn('[logger] remote flush failed', error);
     }
   } finally {
     if (pendingQueue.length > 0) {
@@ -217,12 +229,22 @@ function emit(
   context?: FrontendLogContext,
   details?: Record<string, unknown>,
 ): FrontendLogEvent {
-  const payload = createLogEvent(level, event, message, context, details);
-  appendToBuffer(payload);
-  printToConsole(payload);
-  if (shouldShip(level)) {
-    pendingQueue.push(payload);
-    scheduleFlush();
+  // Поднимаем guard ДО любой логики (redactValue / safeStoreContext / require()),
+  // чтобы случайный console.* внутри них не зацикливался через bridge.
+  inEmit = true;
+  let payload: FrontendLogEvent;
+  try {
+    const safeContext = context ? (redactValue(context) as FrontendLogContext) : undefined;
+    const safeDetails = details ? (redactValue(details) as Record<string, unknown>) : undefined;
+    payload = createLogEvent(level, event, message, safeContext, safeDetails);
+    appendToBuffer(payload);
+    printToConsole(payload);
+    if (shouldShip(level)) {
+      pendingQueue.push(payload);
+      scheduleFlush();
+    }
+  } finally {
+    inEmit = false;
   }
   return payload;
 }
@@ -253,6 +275,78 @@ export const logger = {
   ) => emit(level, event, message, context, details),
 };
 
+function describeArg(value: unknown, seen: WeakSet<object> = new WeakSet()): unknown {
+  if (value === null || value === undefined) return value;
+  const t = typeof value;
+  if (t === 'string' || t === 'number' || t === 'boolean') return value;
+  if (t === 'function') return `[Function ${(value as Function).name || 'anonymous'}]`;
+  if (t === 'symbol') return (value as symbol).toString();
+  if (t === 'bigint') return `${(value as bigint).toString()}n`;
+  if (value instanceof Error) {
+    return { name: value.name, message: value.message, stack: value.stack };
+  }
+  if (typeof window !== 'undefined' && value instanceof window.Element) {
+    return `[Element ${value.tagName.toLowerCase()}]`;
+  }
+  if (typeof value === 'object') {
+    if (seen.has(value as object)) return '[Circular]';
+    seen.add(value as object);
+    if (Array.isArray(value)) {
+      return value.map((item) => describeArg(item, seen));
+    }
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = describeArg(item, seen);
+    }
+    return out;
+  }
+  return String(value);
+}
+
+function captureConsole(method: 'log' | 'info' | 'warn' | 'error' | 'debug', args: unknown[]): void {
+  if (inEmit) {
+    return;
+  }
+  const level: FrontendLogLevel = method === 'log' ? 'debug' : method;
+  const safeArgs = args.map((arg) => describeArg(arg));
+  const message = args
+    .map((arg) => (typeof arg === 'string' ? arg : ''))
+    .filter(Boolean)
+    .join(' ') || `console.${method}`;
+  emit(level, 'console.captured', message, undefined, {
+    consoleMethod: method,
+    args: safeArgs,
+  });
+}
+
+export function installConsoleBridge(): void {
+  if (consoleBridgeInstalled || typeof window === 'undefined' || !LOG_CAPTURE_CONSOLE) {
+    return;
+  }
+  consoleBridgeInstalled = true;
+
+  console.log = (...args: unknown[]) => {
+    nativeConsole.log(...args);
+    captureConsole('log', args);
+  };
+  console.info = (...args: unknown[]) => {
+    nativeConsole.info(...args);
+    captureConsole('info', args);
+  };
+  console.warn = (...args: unknown[]) => {
+    nativeConsole.warn(...args);
+    captureConsole('warn', args);
+  };
+  console.error = (...args: unknown[]) => {
+    nativeConsole.error(...args);
+    captureConsole('error', args);
+  };
+  console.debug = (...args: unknown[]) => {
+    nativeConsole.debug(...args);
+    captureConsole('debug', args);
+  };
+}
+
 export function installGlobalErrorHandlers(): void {
   if (globalHandlersInstalled || typeof window === 'undefined') {
     return;
@@ -272,4 +366,6 @@ export function installGlobalErrorHandlers(): void {
       reason: String(event.reason),
     });
   });
+
+  installConsoleBridge();
 }

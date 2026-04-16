@@ -86,6 +86,7 @@ from api.routers.sessions import router as sessions_router
 from api.routers.lobby import router as lobby_router
 from api.routers.game import router as game_router
 from api.routers.logs import router as logs_router
+from api.routers.observability import router as observability_router
 from api.routers.subscriptions import router as subscriptions_router
 from api.websockets.ws import router as ws_router
 
@@ -94,6 +95,7 @@ app.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"])
 app.include_router(lobby_router, prefix="/api/sessions", tags=["lobby"])
 app.include_router(game_router, prefix="/api/sessions", tags=["game"])
 app.include_router(logs_router, prefix="/api/logs", tags=["logs"])
+app.include_router(observability_router, prefix="/api/observability", tags=["observability"])
 app.include_router(subscriptions_router, prefix="/api/subscriptions", tags=["subscriptions"])
 app.include_router(ws_router, prefix="/ws", tags=["ws"])
 

@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     FRONTEND_LOG_INGEST_ENABLED: bool = True
     FRONTEND_LOG_REMOTE_MIN_LEVEL: str = Field(default="info")
+    # Dev-only: открывает /api/observability/* для logs-frontend dashboard.
+    # В production должен быть выключен — эндпоинты не требуют auth.
+    OBSERVABILITY_ENABLED: bool = False
 
     @property
     def cors_origins(self) -> list[str]:

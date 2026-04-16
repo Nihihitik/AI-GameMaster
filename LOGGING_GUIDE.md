@@ -14,8 +14,10 @@
 
 - `backend` пишет свои логи в stdout/stderr
 - `frontend` пишет локально в browser console
-- важные frontend-события дополнительно отправляются на `backend`
+- в `development` весь frontend-поток (включая `debug` и нативные `console.*`) форвардится на `backend`
+- в `production` на `backend` уходят только важные frontend-события (`info`/`warn`/`error`)
 - `backend` пишет принятые frontend-события в общий log stream с `source=frontend`
+- для просмотра в `development` поднимается отдельный `logs-frontend` (порт 3100), который тянет stdout `gamemaster-backend` через docker.sock и разделяет поток на секции Backend / Frontend по полю `source`
 
 ## Где лежит логика
 
@@ -27,9 +29,14 @@
 
 ### Frontend
 
-- [frontend/src/services/logger.ts](/Users/nihihitik/Projects/AI-GameMaster/frontend/src/services/logger.ts)
+- [frontend/src/services/logger.ts](/Users/nihihitik/Projects/AI-GameMaster/frontend/src/services/logger.ts) — logger API, console-bridge, batched ingest
+- [frontend/src/services/logRedaction.ts](/Users/nihihitik/Projects/AI-GameMaster/frontend/src/services/logRedaction.ts) — redaction sensitive-полей перед отправкой
 - [frontend/src/components/app/AppErrorBoundary.tsx](/Users/nihihitik/Projects/AI-GameMaster/frontend/src/components/app/AppErrorBoundary.tsx)
 - [frontend/src/hooks/usePageViewLogger.ts](/Users/nihihitik/Projects/AI-GameMaster/frontend/src/hooks/usePageViewLogger.ts)
+
+### Logs viewer (dev)
+
+- [logs-frontend/](/Users/nihihitik/Projects/AI-GameMaster/logs-frontend) — отдельный Next.js на порту 3100, читает docker.sock и стримит логи в браузер по SSE
 
 ## Уровни логирования
 
@@ -113,14 +120,17 @@
 
 ### Frontend
 
-- основной sink: browser console
-- важные события дополнительно уходят в backend ingest endpoint
-- за счёт этого frontend business logs тоже видны в backend docker logs
+- sink #1: viewer на http://localhost:3100 (секция Frontend)
+- sink #2: browser console
+- sink #3: backend docker logs (`docker compose logs -f backend`) — frontend события приходят туда же с `source=frontend`
+- в dev на backend форвардятся **все** уровни (включая `debug`) и нативные `console.*` (через console-bridge в `logger.ts`). Для контроля: env-флаги `REACT_APP_REMOTE_LOG_MIN_LEVEL=debug` и `REACT_APP_LOG_CAPTURE_CONSOLE=true`
 
 ## Production
 
 - backend пишет структурированный JSON в stdout
-- frontend отправляет важные `info` / `warn` / `error` на backend
+- frontend отправляет только `info` / `warn` / `error` на backend (debug остаётся в браузере)
+- console-bridge в production выключен (`REACT_APP_LOG_CAPTURE_CONSOLE=false` или unset)
+- viewer (`logs-frontend`) поднимается только в dev и не используется в production
 - отдельной таблицы логов в БД нет
 
 ## Event-теги backend
@@ -396,6 +406,15 @@
 - `api.nonfatal_failure`
   - нефатальная ошибка запроса/деградация сценария
 
+### Console (только dev)
+
+- `console.captured`
+  - перехвачен нативный `console.log/info/warn/debug/error`
+  - `details.consoleMethod` — имя оригинального метода
+  - `details.args` — сериализованные аргументы (через `describeArg`: Error → name/message/stack, DOM-узлы → теги, циклические ссылки → `[Circular]`)
+  - level записи соответствует методу: `console.log` → `debug`, `console.info` → `info`, `console.warn` → `warn`, `console.error` → `error`, `console.debug` → `debug`
+  - включается флагом `REACT_APP_LOG_CAPTURE_CONSOLE=true`
+
 ### WebSocket
 
 - `ws.connected`
@@ -505,20 +524,40 @@ domain.action
 - `access_token`
 - `refresh_token`
 - `Authorization`
+- `token`
 - `token_hash`
 
-Backend делает redaction автоматически, но на это нельзя полагаться как на единственную защиту. Не добавляй такие поля в `details`, если они не нужны.
+Backend и frontend делают redaction автоматически по совпадающему черному списку (см. `backend/core/logging.py:_SENSITIVE_KEYS` и `frontend/src/services/logRedaction.ts`), но на это нельзя полагаться как на единственную защиту. Не добавляй такие поля в `details`, если они не нужны.
+
+### Ограничение console-bridge
+
+Console-bridge сериализует аргументы `console.*` через `describeArg`, который рекурсивно прогоняет объекты через redaction. Однако:
+
+- `console.log('token=' + accessToken)` — токен попадает в строковый аргумент, redaction по ключам не сработает
+- `console.log` форвардится как `event=console.captured` со всем содержимым `args` — это видно в backend stdout
+
+Правило: не подставляй секреты напрямую в строки `console.*`. Если нужно логировать действие со связкой к токену — пользуйся обычным `logger.info('event', 'message', { token: '...' })`, redaction отработает.
 
 ## Как читать логи
 
-### Backend в Docker
+### Viewer (logs-frontend, dev primary sink)
+
+```bash
+cd /Users/nihihitik/Projects/AI-GameMaster/logs-frontend
+docker compose up --build
+# затем http://localhost:3100
+```
+
+Sidebar разделяет поток на Backend (события с `source=backend`) и Frontend (`source=frontend`). Доступны фильтры по level, domain, event, free-text, session_id, user_id, request correlation, time range. Pause/Resume замораживает добавление в DOM, не теряя приходящие события.
+
+### Backend в Docker (fallback)
 
 ```bash
 cd /Users/nihihitik/Projects/AI-GameMaster/backend
 docker compose logs -f backend
 ```
 
-### Frontend в dev
+### Frontend в dev (fallback)
 
 - открывать browser console
 - при необходимости искать дублирующее событие в backend logs по `source=frontend`
