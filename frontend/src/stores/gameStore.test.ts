@@ -1,5 +1,6 @@
 import { useGameStore } from './gameStore';
 import { gameApi } from '../api/gameApi';
+import { GameStateResponse } from '../types/api';
 
 jest.mock('../api/gameApi', () => ({
   gameApi: {
@@ -39,15 +40,15 @@ describe('gameStore role reveal sync', () => {
         game_paused: false,
         settings: {},
         phase: {
-          id: null,
+          id: '',
           type: null,
-          number: null,
+          number: 0,
           sub_phase: null,
-          started_at: null,
+          started_at: '',
           timer_seconds: null,
           timer_started_at: null,
           vote_round: 1,
-        } as any,
+        },
         my_player: {
           id: 'p1',
           name: 'Игрок',
@@ -63,7 +64,7 @@ describe('gameStore role reveal sync', () => {
         votes: null,
         result: null,
         announcement: null,
-      },
+      } as unknown as GameStateResponse,
     });
 
     await useGameStore.getState().loadState('session-1');
@@ -183,5 +184,24 @@ describe('gameStore role reveal sync', () => {
     const state = useGameStore.getState();
     expect(state.actionSubmitted).toBe(true);
     expect(state.selectedTarget).toBe('p2');
+  });
+
+  it('keeps current screen for non-blocking queued announcements', () => {
+    useGameStore.setState({
+      screen: 'day_discussion',
+      currentAnnouncement: null,
+    });
+
+    useGameStore.getState().queueAnnouncement({
+      announcement: {
+        text: 'Фоновая реплика',
+        duration_ms: 1200,
+        blocking: false,
+      },
+    });
+
+    const state = useGameStore.getState();
+    expect(state.currentAnnouncement?.text).toBe('Фоновая реплика');
+    expect(state.screen).toBe('day_discussion');
   });
 });

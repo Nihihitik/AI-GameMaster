@@ -2,13 +2,20 @@ import React from 'react';
 import { useSessionStore } from '../../stores/sessionStore';
 import './PauseButton.scss';
 
-export default function PauseButton() {
+interface PauseButtonProps {
+  className?: string;
+}
+
+export default function PauseButton({ className = '' }: PauseButtonProps) {
   const timerPaused = useSessionStore((s) => s.timerPaused);
   const setTimerPaused = useSessionStore((s) => s.setTimerPaused);
+  const classes = ['pause-btn', className, timerPaused ? 'pause-btn--paused' : '']
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <button
-      className={`pause-btn ${timerPaused ? 'pause-btn--paused' : ''}`}
+      className={classes}
       onClick={() => setTimerPaused(!timerPaused)}
       title={timerPaused ? 'Продолжить' : 'Пауза'}
     >

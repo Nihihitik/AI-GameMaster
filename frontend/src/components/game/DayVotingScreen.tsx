@@ -1,24 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import PauseButton from './PauseButton';
+import { useCountdown } from '../../hooks/useCountdown';
 import './DayVotingScreen.scss';
-
-/**
- * Compute remaining seconds from phase.timer_seconds + phase.timer_started_at.
- */
-function computeRemainingSeconds(
-  timerSeconds: number | null | undefined,
-  timerStartedAt: string | null | undefined,
-  fallback: number,
-): number {
-  if (!timerSeconds) return fallback;
-  if (!timerStartedAt) return timerSeconds;
-  const startedMs = Date.parse(timerStartedAt);
-  if (Number.isNaN(startedMs)) return timerSeconds;
-  const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
-  return Math.max(0, timerSeconds - elapsed);
-}
 
 export default function DayVotingScreen() {
   const availableTargets = useGameStore((s) => s.availableTargets);
@@ -33,32 +18,17 @@ export default function DayVotingScreen() {
   const timerPaused = useSessionStore((s) => s.timerPaused);
 
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
-  const [timeLeft, setTimeLeft] = useState(votingTimer);
   const [submitting, setSubmitting] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeLeft = useCountdown({
+    paused: timerPaused || voteSubmitted,
+    fallbackSeconds: votingTimer,
+    timerSeconds: phase?.timer_seconds,
+    timerStartedAt: phase?.timer_started_at,
+    resetKey: phase?.id ?? 'voting',
+  });
 
   const isBlocked = myPlayerId === dayBlockedPlayer;
   const canVote = myStatus === 'alive' && !isBlocked && !voteSubmitted;
-
-  useEffect(() => {
-    const remaining = computeRemainingSeconds(
-      phase?.timer_seconds,
-      phase?.timer_started_at,
-      votingTimer,
-    );
-    setTimeLeft(remaining);
-  }, [phase?.id, phase?.timer_seconds, phase?.timer_started_at, votingTimer]);
-
-  useEffect(() => {
-    if (timeLeft <= 0 || voteSubmitted || timerPaused) {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      return;
-    }
-    intervalRef.current = setInterval(() => {
-      setTimeLeft((t) => (t <= 1 ? 0 : t - 1));
-    }, 1000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [timeLeft, voteSubmitted, timerPaused]);
 
   const handleConfirmVote = async () => {
     if (!canVote || !selectedTarget || submitting) return;

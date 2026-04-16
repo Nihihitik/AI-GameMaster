@@ -7,6 +7,7 @@ import type {
 } from '../types/api';
 import { sessionApi } from '../api/sessionApi';
 import { useAuthStore } from './authStore';
+import { createDefaultSessionSettings } from '../utils/sessionDefaults';
 
 export const MAX_PLAYERS = 12;
 export const MIN_PLAYERS = 5;
@@ -19,20 +20,7 @@ export function getCiviliansCount(playerCount: number, rc: RoleConfig): number {
   return Math.max(0, playerCount - getSpecialRolesCount(rc));
 }
 
-const DEFAULT_SETTINGS: SessionSettings = {
-  role_reveal_timer_seconds: 15,
-  discussion_timer_seconds: 120,
-  voting_timer_seconds: 60,
-  night_action_timer_seconds: 30,
-  role_config: {
-    mafia: 1,
-    don: 0,
-    sheriff: 1,
-    doctor: 1,
-    lover: 0,
-    maniac: 0,
-  },
-};
+export const DEFAULT_SETTINGS = createDefaultSessionSettings();
 
 interface SessionState {
   session: Session | null;
@@ -77,7 +65,7 @@ function playersFromList(list: PlayerInList[]): LobbyPlayer[] {
 export const useSessionStore = create<SessionState>((set, get) => ({
   session: null,
   players: [],
-  settings: DEFAULT_SETTINGS,
+  settings: createDefaultSessionSettings(),
   isHost: false,
   myPlayerId: null,
 
@@ -250,7 +238,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({
       session: null,
       players: [],
-      settings: DEFAULT_SETTINGS,
+      settings: createDefaultSessionSettings(),
       isHost: false,
       myPlayerId: null,
       withStory: false,

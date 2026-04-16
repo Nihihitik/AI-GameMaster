@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { Role, Player, Target, Announcement, VoteInfo, GameResult, Phase } from '../types/game';
-import type { GameStateResponse, NightActionCheckResult } from '../types/api';
+import { Role, Player, Target, Announcement, VoteInfo, GameResult, Phase, SessionSettings } from '../types/game';
+import type { AcknowledgeRoleResponse, GameStateResponse, NightActionCheckResult } from '../types/api';
 import { gameApi } from '../api/gameApi';
 import { useSessionStore } from './sessionStore';
 
@@ -36,6 +36,79 @@ export interface NightKill {
   killer?: string;
 }
 
+type HealRestriction = { player_id: string; name: string; reason: string } | null;
+type PhaseLike = Partial<Phase> & {
+  id?: string | null;
+  timer_started_at?: string | null;
+  started_at?: string | null;
+};
+type SessionStatus = 'active' | 'finished' | 'waiting';
+type StateResponsePayload = GameStateResponse & {
+  settings?: Partial<SessionSettings>;
+  my_vote_submitted?: boolean;
+};
+type GameStartedPayload = {
+  phase?: PhaseLike | null;
+  timer_seconds?: number | null;
+  started_at?: string | null;
+};
+type PhasePayload = {
+  phase?: PhaseLike | null;
+  sub_phase?: Phase['sub_phase'];
+  timer_seconds?: number | null;
+  timer_started_at?: string | null;
+  session_status?: SessionStatus;
+  awaiting_action?: boolean;
+  action_type?: NightActionType | null;
+  available_targets?: Target[] | null;
+  announcement?: Announcement | null;
+};
+type ActionRequiredPayload = {
+  action_type?: NightActionType | null;
+  available_targets?: Target[] | null;
+  heal_restriction?: HealRestriction;
+  timer_started_at?: string | null;
+};
+type ActionTimeoutPayload = {
+  action_type?: string;
+};
+type RoleAcknowledgedPayload = {
+  players_acknowledged?: number;
+  players_total?: number;
+};
+type NightResultPayload = {
+  died?: Array<{ player_id: string; name: string }>;
+  day_blocked_player?: string | null;
+  announcement?: Announcement | null;
+};
+type VoteCountsPayload = {
+  votes_cast?: number;
+  cast?: number;
+  votes_total?: number;
+  total_expected?: number;
+  counts?: Record<string, number>;
+};
+type VoteResultPayload = {
+  eliminated?: { player_id?: string | null } | null;
+  eliminated_player_id?: string | null;
+  announcement?: Announcement | null;
+};
+type CheckResultPayload = {
+  target_player_id?: string;
+  targetId?: string;
+  action_type?: NightActionType | null;
+  check_result?: NightActionCheckResult;
+  team?: NightActionCheckResult['team'];
+  is_sheriff?: boolean;
+  match?: boolean;
+};
+type ResultPayload = {
+  winner?: GameResult['winner'];
+  announcement?: Announcement | null;
+  final_roster?: GameResult['players'];
+  players?: GameResult['players'];
+};
+
 interface GameState {
   screen: GameScreen;
   sessionId: string | null;
@@ -68,7 +141,7 @@ interface GameState {
   selectedTarget: string | null;
   actionSubmitted: boolean;
   checkResults: CheckResultEntry[];
-  healRestriction: { player_id: string; name: string; reason: string } | null;
+  healRestriction: HealRestriction;
 
   // Night result tracking
   nightKills: NightKill[];
@@ -101,22 +174,22 @@ interface GameState {
   advanceNarrator: () => void;
 
   // WebSocket hooks
-  onGameStarted: (payload: any) => void;
-  setMyRole: (payload: any) => void;
-  applyPhase: (payload: any) => void;
-  applyActionRequired: (payload: any) => void;
-  applyActionBlocked: (payload: any) => void;
-  applyActionTimeout: (payload: any) => void;
-  applyRoleAcknowledged: (payload: any) => void;
+  onGameStarted: (payload: GameStartedPayload) => void;
+  setMyRole: (payload: { role?: Role | null } | Role | null) => void;
+  applyPhase: (payload: PhasePayload | PhaseLike) => void;
+  applyActionRequired: (payload: ActionRequiredPayload) => void;
+  applyActionBlocked: () => void;
+  applyActionTimeout: (payload: ActionTimeoutPayload) => void;
+  applyRoleAcknowledged: (payload: RoleAcknowledgedPayload) => void;
   applyAllAcknowledged: () => void;
-  applyNightResult: (payload: any) => void;
-  setVoteCounts: (payload: any) => void;
-  applyVoteResult: (payload: any) => void;
+  applyNightResult: (payload: NightResultPayload) => void;
+  setVoteCounts: (payload: VoteCountsPayload) => void;
+  applyVoteResult: (payload: VoteResultPayload) => void;
   markEliminated: (playerId: string) => void;
   setActionSubmitted: (value: boolean) => void;
-  addCheckResult: (payload: any) => void;
-  queueAnnouncement: (payload: any) => void;
-  setResult: (payload: any) => void;
+  addCheckResult: (payload: CheckResultPayload) => void;
+  queueAnnouncement: (payload: { announcement?: Announcement } | Announcement) => void;
+  setResult: (payload: ResultPayload) => void;
 
   reset: () => void;
 }
@@ -125,12 +198,12 @@ interface GameState {
  * Map backend phase.type/sub_phase + awaiting_action to frontend GameScreen.
  */
 function deriveScreen(
-  phaseType: Phase['type'] | 'finished' | undefined,
+  phaseType: Phase['type'] | 'finished' | null | undefined,
   subPhase: Phase['sub_phase'] | undefined,
   awaitingAction: boolean,
-  sessionStatus?: 'active' | 'finished' | 'waiting',
+  sessionStatus?: SessionStatus,
 ): GameScreen {
-  if (sessionStatus === 'finished' || phaseType === ('finished' as any)) {
+  if (sessionStatus === 'finished' || phaseType === 'finished') {
     return 'finale';
   }
   if (sessionStatus === 'active' && !phaseType) return 'syncing';
@@ -171,17 +244,103 @@ function sameAnnouncement(
 }
 
 function actionWindowIdentity(
-  phase: Partial<Phase> | null | undefined,
+  phase: PhaseLike | null | undefined,
   actionType: NightActionType | null | undefined,
 ): string {
   if (!phase?.type) return '';
   return [
-    (phase as any)?.id ?? '',
+    phase.id ?? '',
     phase.type,
     phase.number ?? '',
-    (phase as any)?.timer_started_at ?? '',
+    phase.timer_started_at ?? '',
     actionType ?? '',
   ].join('|');
+}
+
+function resolveAnnouncement(
+  current: Announcement | null,
+  incoming: Announcement | null | undefined,
+): Announcement | null {
+  return sameAnnouncement(current, incoming) ? current : incoming ?? null;
+}
+
+function hasBlockingAnnouncement(announcement: Announcement | null | undefined): boolean {
+  return Boolean(announcement?.text) && announcement?.blocking !== false;
+}
+
+function applyAnnouncementScreen(
+  fallbackScreen: GameScreen,
+  announcement: Announcement | null,
+): GameScreen {
+  return hasBlockingAnnouncement(announcement) ? 'narrator' : fallbackScreen;
+}
+
+function mergeSessionSettings(incoming: Partial<SessionSettings> | undefined): void {
+  if (!incoming) {
+    return;
+  }
+
+  useSessionStore.setState((prev) => ({
+    settings: {
+      ...prev.settings,
+      ...incoming,
+      role_config: {
+        ...prev.settings.role_config,
+        ...(incoming.role_config ?? {}),
+      },
+    },
+  }));
+}
+
+function syncPauseState(gamePaused: boolean | undefined): void {
+  if (gamePaused == null) {
+    return;
+  }
+
+  useSessionStore.setState({ timerPaused: gamePaused });
+}
+
+function buildPhase(
+  rawPhase: PhaseLike | null | undefined,
+  overrides?: {
+    sub_phase?: Phase['sub_phase'];
+    timer_seconds?: number | null;
+    timer_started_at?: string | null;
+  },
+): Phase | null {
+  if (!rawPhase?.type) {
+    return null;
+  }
+
+  return {
+    id: rawPhase.id ?? '',
+    type: rawPhase.type,
+    number: rawPhase.number ?? 0,
+    sub_phase: overrides?.sub_phase ?? rawPhase.sub_phase ?? null,
+    started_at: rawPhase.started_at ?? '',
+    timer_seconds: overrides?.timer_seconds ?? rawPhase.timer_seconds ?? null,
+    timer_started_at: overrides?.timer_started_at ?? rawPhase.timer_started_at ?? null,
+    vote_round: rawPhase.vote_round,
+  };
+}
+
+function buildCheckResultEntry(
+  targetId: string,
+  actionType: NightActionType,
+  result: NightActionCheckResult,
+): CheckResultEntry {
+  return {
+    targetId,
+    actionType,
+    team: result.team,
+    isSheriff: result.is_sheriff ?? result.match,
+  };
+}
+
+function isAnnouncementEnvelope(
+  payload: { announcement?: Announcement } | Announcement,
+): payload is { announcement?: Announcement } {
+  return 'announcement' in payload;
 }
 
 const initialState = {
@@ -223,7 +382,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   loadState: async (sessionId) => {
     const response = await gameApi.getState(sessionId);
-    const data: GameStateResponse = response.data;
+    const data: StateResponsePayload = response.data;
 
     const phase = data.phase;
     const screen = deriveScreen(
@@ -234,33 +393,22 @@ export const useGameStore = create<GameState>((set, get) => ({
     );
 
     const myPlayer = data.my_player;
-    const actionType = (data.action_type as NightActionType | null) ?? null;
+    const actionType = data.action_type ?? null;
 
     // Sync pause state and settings from backend into sessionStore.
-    if ((data as any).game_paused != null) {
-      useSessionStore.setState({ timerPaused: !!(data as any).game_paused });
-    }
-    // Hydrate session settings so timer fallback values are correct after refresh.
-    if ((data as any).settings && typeof (data as any).settings === 'object') {
-      const incoming = (data as any).settings;
-      useSessionStore.setState((prev) => ({
-        settings: { ...prev.settings, ...incoming, role_config: { ...prev.settings.role_config, ...(incoming.role_config || {}) } },
-      }));
-    }
-    const announcement = (data as any).announcement ?? null;
+    syncPauseState(data.game_paused);
+    mergeSessionSettings(data.settings);
+    const announcement = data.announcement ?? null;
 
     set((state) => {
-      const nextAnnouncement = sameAnnouncement(state.currentAnnouncement, announcement)
-        ? state.currentAnnouncement
-        : announcement;
-      const showNarrator = !!nextAnnouncement?.text && nextAnnouncement?.blocking !== false;
+      const nextAnnouncement = resolveAnnouncement(state.currentAnnouncement, announcement);
       const sameActionWindow =
         actionWindowIdentity(state.phase, state.actionType) === actionWindowIdentity(phase, actionType);
 
       return {
         sessionId,
         phase,
-        screen: showNarrator ? 'narrator' : screen,
+        screen: applyAnnouncementScreen(screen, nextAnnouncement),
         myPlayerId: myPlayer?.id ?? null,
         myRole: myPlayer?.role ?? null,
         myStatus: myPlayer?.status ?? 'alive',
@@ -275,7 +423,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         availableTargets: data.available_targets ?? [],
         selectedTarget: sameActionWindow ? state.selectedTarget : null,
         actionSubmitted: data.my_action_submitted || (sameActionWindow ? state.actionSubmitted : false),
-        voteSubmitted: (data as any).my_vote_submitted || state.voteSubmitted,
+        voteSubmitted: data.my_vote_submitted || state.voteSubmitted,
         votes: data.votes ?? null,
         dayBlockedPlayer: data.day_blocked_player ?? null,
         // Не затираем финальный result при re-sync: /state не возвращает
@@ -297,12 +445,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ actionSubmitted: true, selectedTarget: targetId });
     // If backend returns check_result inline (for sheriff/don), store it.
     if (data?.check_result && state.actionType) {
-      const entry: CheckResultEntry = {
-        targetId,
-        actionType: state.actionType,
-        team: data.check_result.team,
-        isSheriff: data.check_result.is_sheriff ?? data.check_result.match,
-      };
+      const entry = buildCheckResultEntry(targetId, state.actionType, data.check_result);
       set((s) => ({ checkResults: [...s.checkResults, entry] }));
     }
   },
@@ -319,9 +462,9 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (!state.sessionId) return;
     try {
       const res = await gameApi.acknowledgeRole(state.sessionId);
-      const body = res?.data ?? res;
-      const acked = (body as any)?.players_acknowledged;
-      const total = (body as any)?.players_total;
+      const body: Partial<AcknowledgeRoleResponse> = res?.data ?? res;
+      const acked = body.players_acknowledged;
+      const total = body.players_total;
       set({
         acknowledged: true,
         ...(acked != null ? { acknowledgedCount: Number(acked) } : {}),
@@ -348,15 +491,10 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   onGameStarted: (payload) => {
     // Build phase from the game_started payload so timer_seconds is correct.
-    const rawPhase = payload?.phase;
-    const phase: Phase | null = rawPhase
-      ? {
-          ...rawPhase,
-          sub_phase: rawPhase.sub_phase ?? null,
-          timer_seconds: payload?.timer_seconds ?? rawPhase.timer_seconds ?? null,
-          timer_started_at: payload?.started_at ?? rawPhase.timer_started_at ?? null,
-        }
-      : null;
+    const phase = buildPhase(payload.phase, {
+      timer_seconds: payload.timer_seconds,
+      timer_started_at: payload.started_at,
+    });
     // Go straight to role_reveal — players read their cards first.
     // Rules narrator plays AFTER all acknowledge (via transition_to_night).
     set((state) => {
@@ -380,34 +518,40 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   setMyRole: (payload) => {
     // payload may be either { role } or the raw role object
-    const role: Role | null = payload?.role ?? payload ?? null;
+    const role = payload && typeof payload === 'object'
+      ? ('name' in payload && 'team' in payload
+          ? payload
+          : ('role' in payload ? payload.role ?? null : null))
+      : null;
     set({ myRole: role });
   },
 
   applyPhase: (payload) => {
-    const rawPhase = payload?.phase ?? payload;
-    const phase: Phase = {
-      ...rawPhase,
-      sub_phase: payload?.sub_phase ?? rawPhase?.sub_phase ?? null,
-      timer_seconds: payload?.timer_seconds ?? rawPhase?.timer_seconds ?? null,
-      timer_started_at: payload?.timer_started_at ?? rawPhase?.timer_started_at ?? null,
-    };
-    const sessionStatus = payload?.session_status;
-    const awaitingAction: boolean = payload?.awaiting_action ?? false;
-    const incomingActionType: NightActionType | null = payload?.action_type ?? null;
-    const incomingTargets: Target[] = payload?.available_targets ?? [];
-    const announcement: Announcement | null = payload?.announcement ?? null;
+    const phasePayload: PhasePayload = 'phase' in payload ? payload : { phase: payload };
+    const rawPhase = phasePayload.phase;
+    const phase = buildPhase(rawPhase, {
+      sub_phase: phasePayload.sub_phase,
+      timer_seconds: phasePayload.timer_seconds,
+      timer_started_at: phasePayload.timer_started_at,
+    });
+    if (!phase) {
+      return;
+    }
+    const sessionStatus = phasePayload.session_status;
+    const awaitingAction: boolean = phasePayload.awaiting_action ?? false;
+    const incomingActionType: NightActionType | null = phasePayload.action_type ?? null;
+    const incomingTargets: Target[] = phasePayload.available_targets ?? [];
+    const announcement: Announcement | null = phasePayload.announcement ?? null;
 
     set((state) => {
       if (state.screen === 'finale' || state.result) return state;
-      const nextAnnouncement = sameAnnouncement(state.currentAnnouncement, announcement)
-        ? state.currentAnnouncement
-        : announcement;
+      const nextAnnouncement = resolveAnnouncement(state.currentAnnouncement, announcement);
       const sameActionWindow =
         actionWindowIdentity(state.phase, state.actionType) === actionWindowIdentity(phase, incomingActionType);
-      const screen = nextAnnouncement?.text && nextAnnouncement?.blocking !== false
-        ? 'narrator'
-        : deriveScreen(phase?.type, phase?.sub_phase, awaitingAction, sessionStatus);
+      const screen = applyAnnouncementScreen(
+        deriveScreen(phase.type, phase.sub_phase, awaitingAction, sessionStatus),
+        nextAnnouncement,
+      );
 
       return {
         phase,
@@ -461,7 +605,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     });
   },
 
-  applyActionBlocked: (_payload) => {
+  applyActionBlocked: () => {
     set((state) => {
       if (state.screen === 'finale' || state.result) return state;
       return {
@@ -524,9 +668,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const announcement: Announcement | null = payload?.announcement ?? null;
 
     set((s) => {
-      const nextAnnouncement = sameAnnouncement(s.currentAnnouncement, announcement)
-        ? s.currentAnnouncement
-        : announcement;
+      const nextAnnouncement = resolveAnnouncement(s.currentAnnouncement, announcement);
       const base = {
         nightKills: died.map((d) => ({ player_id: d.player_id, name: d.name })),
         nightResultDied: died,
@@ -538,7 +680,7 @@ export const useGameStore = create<GameState>((set, get) => ({
         myStatus: died.some((d) => d.player_id === s.myPlayerId) ? ('dead' as const) : s.myStatus,
         currentAnnouncement: nextAnnouncement,
       };
-      if (nextAnnouncement?.text && nextAnnouncement?.blocking !== false) {
+      if (hasBlockingAnnouncement(nextAnnouncement)) {
         return {
           ...base,
           screen: 'narrator' as GameScreen,
@@ -566,18 +708,16 @@ export const useGameStore = create<GameState>((set, get) => ({
     const announcement: Announcement | null = payload?.announcement ?? null;
 
     set((state) => {
-      const nextAnnouncement = sameAnnouncement(state.currentAnnouncement, announcement)
-        ? state.currentAnnouncement
-        : announcement;
-      const base: any = {};
+      const nextAnnouncement = resolveAnnouncement(state.currentAnnouncement, announcement);
+      const base: Partial<GameState> = {};
       if (eliminatedId) {
-        base.players = state.players.map((p: any) =>
+        base.players = state.players.map((p) =>
           p.id === eliminatedId ? { ...p, status: 'dead' as const } : p
         );
         base.myStatus = state.myPlayerId === eliminatedId ? 'dead' : state.myStatus;
       }
       base.currentAnnouncement = nextAnnouncement;
-      if (nextAnnouncement?.text && nextAnnouncement?.blocking !== false) {
+      if (hasBlockingAnnouncement(nextAnnouncement)) {
         return {
           ...base,
           screen: 'narrator' as GameScreen,
@@ -599,25 +739,26 @@ export const useGameStore = create<GameState>((set, get) => ({
   setActionSubmitted: (value) => set({ actionSubmitted: value }),
 
   addCheckResult: (payload) => {
-    const targetId: string = payload?.target_player_id ?? payload?.targetId;
+    const targetId = payload?.target_player_id ?? payload?.targetId;
     if (!targetId) return;
     const result: NightActionCheckResult = payload?.check_result ?? payload;
     const state = get();
-    const entry: CheckResultEntry = {
-      targetId,
-      actionType: (payload?.action_type ?? state.actionType) as NightActionType,
-      team: result?.team,
-      isSheriff: result?.is_sheriff ?? result?.match,
-    };
+    const actionType = payload?.action_type ?? state.actionType;
+    if (!actionType) {
+      return;
+    }
+    const entry = buildCheckResultEntry(targetId, actionType, result);
     set((s) => ({ checkResults: [...s.checkResults, entry] }));
   },
 
   queueAnnouncement: (payload) => {
-    const announcement: Announcement = payload?.announcement ?? payload;
+    const announcement: Announcement | null =
+      isAnnouncementEnvelope(payload) ? payload.announcement ?? null : payload;
+    if (!announcement) {
+      return;
+    }
     set((state) => {
-      const nextAnnouncement = sameAnnouncement(state.currentAnnouncement, announcement)
-        ? state.currentAnnouncement
-        : announcement;
+      const nextAnnouncement = resolveAnnouncement(state.currentAnnouncement, announcement);
       return {
         currentAnnouncement: nextAnnouncement,
         screen: nextAnnouncement?.blocking === false ? state.screen : 'narrator',

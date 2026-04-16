@@ -11,8 +11,7 @@ import { useGameStore } from '../stores/gameStore';
 import { gameApi } from '../api/gameApi';
 import { sessionApi } from '../api/sessionApi';
 import { wsClient } from '../api/wsClient';
-import { parseApiError } from '../utils/parseApiError';
-import { ERROR_MESSAGES } from '../utils/constants';
+import { getApiErrorMessage } from '../utils/getApiErrorMessage';
 import './LobbyPage.scss';
 
 export default function LobbyPage() {
@@ -42,7 +41,7 @@ export default function LobbyPage() {
   const allowNavigationRef = useRef(false);
 
   // Общий хелпер: для хоста закрываем всю сессию, для обычного игрока — только его слот.
-  const leaveSessionIfAny = async () => {
+  const leaveSessionIfAny = React.useCallback(async () => {
     if (leavingRef.current) return;
     leavingRef.current = true;
     const state = useSessionStore.getState();
@@ -64,7 +63,7 @@ export default function LobbyPage() {
       state.reset();
       wsClient.disconnect();
     }
-  };
+  }, []);
 
   // Перехватываем любую SPA-навигацию из лобби (back-кнопка шапки, браузерный back, "На главную"
   // в error-view). F5/reload здесь не ловится — это специально, чтобы не выбивать игрока при
@@ -82,8 +81,7 @@ export default function LobbyPage() {
         blocker.proceed();
       })();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blocker.state]);
+  }, [blocker, blocker.state, leaveSessionIfAny]);
 
   const specialCount = getSpecialRolesCount(settings.role_config);
   const civiliansCount = getCiviliansCount(session?.player_count || players.length, settings.role_config);
@@ -116,10 +114,9 @@ export default function LobbyPage() {
         if (loaded) {
           wsClient.connect(loaded.id);
         }
-      } catch (err: any) {
+      } catch (err) {
         if (!cancelled) {
-          const parsed = parseApiError(err);
-          setLoadError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+          setLoadError(getApiErrorMessage(err));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -132,8 +129,7 @@ export default function LobbyPage() {
       // для той же сессии переиспользуется GamePage. Отключение от сессии
       // (выход в главное меню / закрытие / кик) выполняет leaveSessionIfAny.
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code]);
+  }, [code, navigate]);
 
   // Когда не-хост получает по WS свою роль (event role_assigned после game_started),
   // переходим в игру. Для хоста переход выполняет handleStartGame, поэтому здесь !isHost.
@@ -165,9 +161,8 @@ export default function LobbyPage() {
       } else {
         navigate(`/game/${session.id}`);
       }
-    } catch (err: any) {
-      const parsed = parseApiError(err);
-      setStartError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+    } catch (err) {
+      setStartError(getApiErrorMessage(err));
     } finally {
       setStarting(false);
     }
@@ -180,9 +175,8 @@ export default function LobbyPage() {
     try {
       setSettingsError(null);
       await setSettings({ role_config: newConfig });
-    } catch (err: any) {
-      const parsed = parseApiError(err);
-      setSettingsError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+    } catch (err) {
+      setSettingsError(getApiErrorMessage(err));
     }
   };
 
@@ -195,9 +189,8 @@ export default function LobbyPage() {
     try {
       setSettingsError(null);
       await setSettings(partial);
-    } catch (err: any) {
-      const parsed = parseApiError(err);
-      setSettingsError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+    } catch (err) {
+      setSettingsError(getApiErrorMessage(err));
     }
   };
 

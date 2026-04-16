@@ -1,11 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
 import Checkbox from '../components/ui/Checkbox';
 import Loader from '../components/ui/Loader';
+import PauseButton from '../components/game/PauseButton';
 import { useSessionStore } from '../stores/sessionStore';
 import { mockStories } from '../mocks/sessionMocks';
+import { useCountdown } from '../hooks/useCountdown';
 import './StorySelectionPage.scss';
 
 type Phase = 'voting' | 'waiting' | 'revealing' | 'done';
@@ -13,69 +14,102 @@ type Phase = 'voting' | 'waiting' | 'revealing' | 'done';
 export default function StorySelectionPage() {
   const navigate = useNavigate();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detailStory, setDetailStory] = useState<typeof mockStories[0] | null>(null);
   const [votes, setVotes] = useState<Record<string, number>>({});
   const [votedCount, setVotedCount] = useState(0);
   const [phase, setPhase] = useState<Phase>('voting');
   const [revealIndex, setRevealIndex] = useState(0);
   const [winnerStory, setWinnerStory] = useState<typeof mockStories[0] | null>(null);
-  const [timeLeft, setTimeLeft] = useState(60);
 
   const session = useSessionStore((s) => s.session);
   const players = useSessionStore((s) => s.players);
   const timerPaused = useSessionStore((s) => s.timerPaused);
-  const setTimerPaused = useSessionStore((s) => s.setTimerPaused);
   const setSelectedStory = useSessionStore((s) => s.setSelectedStory);
 
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const total = players.length || 8;
+  const hasAutoConfirmedRef = useRef(false);
+  const timeLeft = useCountdown({
+    enabled: phase === 'voting',
+    paused: timerPaused,
+    fallbackSeconds: 60,
+    timerSeconds: null,
+    timerStartedAt: null,
+    resetKey: phase,
+  });
 
   useEffect(() => {
-    if (phase !== 'voting' || timerPaused) {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+    if (phase !== 'voting' || timerPaused || timeLeft > 0 || hasAutoConfirmedRef.current) {
       return;
     }
-    intervalRef.current = setInterval(() => {
-      setTimeLeft((t) => {
-        if (t <= 1) {
-          handleConfirmVote();
-          return 0;
-        }
-        return t - 1;
-      });
-    }, 1000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, timerPaused]);
+
+    hasAutoConfirmedRef.current = true;
+    const myVote = selectedId;
+    if (myVote) {
+      setVotes((prev) => ({ ...prev, [myVote]: (prev[myVote] || 0) + 1 }));
+    }
+    setVotedCount(1);
+    setPhase('waiting');
+  }, [phase, selectedId, timeLeft, timerPaused]);
 
   useEffect(() => {
-    if (phase === 'waiting') {
-      const mockTimers: ReturnType<typeof setTimeout>[] = [];
-      const remaining = total - votedCount;
-      for (let i = 0; i < remaining; i++) {
-        mockTimers.push(
-          setTimeout(() => {
-            setVotedCount((c) => c + 1);
-            const randomStory = mockStories[Math.floor(Math.random() * mockStories.length)];
-            setVotes((prev) => ({
-              ...prev,
-              [randomStory.id]: (prev[randomStory.id] || 0) + 1,
-            }));
-          }, (i + 1) * 1200)
-        );
+    if (phase === 'voting' && timeLeft > 0) {
+      hasAutoConfirmedRef.current = false;
+    }
+  }, [phase, timeLeft]);
+
+  useEffect(() => {
+    if (phase !== 'waiting') {
+      return;
+    }
+
+    const mockTimers: ReturnType<typeof setTimeout>[] = [];
+    const remaining = total - votedCount;
+    for (let i = 0; i < remaining; i += 1) {
+      mockTimers.push(
+        setTimeout(() => {
+          setVotedCount((count) => count + 1);
+          const randomStory = mockStories[Math.floor(Math.random() * mockStories.length)];
+          setVotes((prev) => ({
+            ...prev,
+            [randomStory.id]: (prev[randomStory.id] || 0) + 1,
+          }));
+        }, (i + 1) * 1200)
+      );
+    }
+
+    return () => mockTimers.forEach(clearTimeout);
+  }, [phase, total, votedCount]);
+
+  useEffect(() => {
+    if (phase !== 'waiting' || votedCount < total) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      const maxVotes = Math.max(...Object.values(votes), 0);
+      let candidates: typeof mockStories;
+
+      if (maxVotes === 0) {
+        candidates = [...mockStories];
+      } else {
+        const winIds = Object.entries(votes)
+          .filter(([, value]) => value === maxVotes)
+          .map(([id]) => id);
+        candidates = mockStories.filter((story) => winIds.includes(story.id));
       }
-      return () => mockTimers.forEach(clearTimeout);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
 
-  useEffect(() => {
-    if (phase === 'waiting' && votedCount >= total) {
-      const timer = setTimeout(() => resolveWinner(), 800);
-      return () => clearTimeout(timer);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [votedCount, phase]);
+      if (candidates.length === 1) {
+        setWinnerStory(candidates[0]);
+        setPhase('done');
+        return;
+      }
+
+      setWinnerStory(candidates[Math.floor(Math.random() * candidates.length)]);
+      setPhase('revealing');
+      setRevealIndex(0);
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [phase, total, votedCount, votes]);
 
   useEffect(() => {
     if (phase !== 'revealing') return;
@@ -99,7 +133,7 @@ export default function StorySelectionPage() {
     }
   };
 
-  const handleConfirmVote = useCallback(() => {
+  const handleConfirmVote = () => {
     if (phase !== 'voting') return;
     const myVote = selectedId;
     if (myVote) {
@@ -107,29 +141,6 @@ export default function StorySelectionPage() {
     }
     setVotedCount(1);
     setPhase('waiting');
-  }, [phase, selectedId]);
-
-  const resolveWinner = () => {
-    const maxVotes = Math.max(...Object.values(votes), 0);
-    let candidates: typeof mockStories;
-
-    if (maxVotes === 0) {
-      candidates = [...mockStories];
-    } else {
-      const winIds = Object.entries(votes)
-        .filter(([, v]) => v === maxVotes)
-        .map(([id]) => id);
-      candidates = mockStories.filter((s) => winIds.includes(s.id));
-    }
-
-    if (candidates.length === 1) {
-      setWinnerStory(candidates[0]);
-      setPhase('done');
-    } else {
-      setWinnerStory(candidates[Math.floor(Math.random() * candidates.length)]);
-      setPhase('revealing');
-      setRevealIndex(0);
-    }
   };
 
   const handleContinue = () => {
@@ -143,10 +154,6 @@ export default function StorySelectionPage() {
     }
   };
 
-  const togglePause = useCallback(() => {
-    setTimerPaused(!timerPaused);
-  }, [timerPaused, setTimerPaused]);
-
   const formatTime = (s: number) => {
     const m = Math.floor(s / 60);
     const sec = s % 60;
@@ -159,13 +166,7 @@ export default function StorySelectionPage() {
     <div className="story-page">
       <header className="story-header">
         {phase === 'voting' ? (
-          <button className="story-header__pause" onClick={togglePause}>
-            {timerPaused ? (
-              <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21" /></svg>
-            ) : (
-              <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
-            )}
-          </button>
+          <PauseButton className="story-header__pause" />
         ) : (
           <div style={{ width: 40 }} />
         )}
@@ -267,30 +268,6 @@ export default function StorySelectionPage() {
         )}
       </main>
 
-      <Modal
-        isOpen={!!detailStory}
-        onClose={() => setDetailStory(null)}
-        title={detailStory?.title}
-      >
-        {detailStory && (
-          <div className="story-detail">
-            <div className="story-detail__placeholder">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
-                <rect x="3" y="3" width="18" height="18" rx="3" />
-                <circle cx="12" cy="10" r="3" />
-                <path d="M6 21v-1a4 4 0 014-4h4a4 4 0 014 4v1" />
-              </svg>
-            </div>
-            <p className="story-detail__desc">{detailStory.description}</p>
-            <Button onClick={() => {
-              handleToggleVote(detailStory.id);
-              setDetailStory(null);
-            }}>
-              {selectedId === detailStory.id ? 'Убрать голос' : 'Голосовать'}
-            </Button>
-          </div>
-        )}
-      </Modal>
     </div>
   );
 }

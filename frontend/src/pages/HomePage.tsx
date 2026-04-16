@@ -7,27 +7,13 @@ import Stepper from '../components/ui/Stepper';
 import Slider from '../components/ui/Slider';
 import { useSessionStore, MIN_PLAYERS, MAX_PLAYERS, getSpecialRolesCount, getCiviliansCount } from '../stores/sessionStore';
 import { useAuthStore } from '../stores/authStore';
-import { SessionSettings, RoleConfig } from '../types/game';
-import { parseApiError } from '../utils/parseApiError';
-import { ERROR_MESSAGES } from '../utils/constants';
+import { RoleConfig } from '../types/game';
 import { subscriptionsApi } from '../api/subscriptionsApi';
 import { authApi } from '../api/authApi';
+import { createDefaultSessionSettings } from '../utils/sessionDefaults';
+import { getApiErrorMessage } from '../utils/getApiErrorMessage';
+import { parseApiError } from '../utils/parseApiError';
 import './HomePage.scss';
-
-const DEFAULT_CREATE_SETTINGS: SessionSettings = {
-  role_reveal_timer_seconds: 15,
-  discussion_timer_seconds: 120,
-  voting_timer_seconds: 60,
-  night_action_timer_seconds: 30,
-  role_config: {
-    mafia: 1,
-    don: 0,
-    sheriff: 1,
-    doctor: 1,
-    lover: 0,
-    maniac: 0,
-  },
-};
 
 export default function HomePage() {
   const [showJoinModal, setShowJoinModal] = useState(false);
@@ -44,7 +30,7 @@ export default function HomePage() {
   const [createError, setCreateError] = useState('');
 
   const [playerCount, setPlayerCount] = useState(8);
-  const [createSettings, setCreateSettings] = useState<SessionSettings>(DEFAULT_CREATE_SETTINGS);
+  const [createSettings, setCreateSettings] = useState(() => createDefaultSessionSettings());
   const [hostName, setHostName] = useState('');
 
   const user = useAuthStore((s) => s.user);
@@ -82,14 +68,13 @@ export default function HomePage() {
       });
       setShowCreateModal(false);
       navigate(`/sessions/${code}`);
-    } catch (err: any) {
-      const parsed = parseApiError(err);
-      if (parsed.code === 'pro_required') {
+    } catch (err) {
+      if (parseApiError(err).code === 'pro_required') {
         setShowCreateModal(false);
         setShowProModal(true);
         return;
       }
-      setCreateError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+      setCreateError(getApiErrorMessage(err));
     } finally {
       setCreating(false);
     }
@@ -122,9 +107,8 @@ export default function HomePage() {
       setJoinStep('code');
       setJoinError('');
       navigate(`/sessions/${normalizedCode}`);
-    } catch (err: any) {
-      const parsed = parseApiError(err);
-      setJoinError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+    } catch (err) {
+      setJoinError(getApiErrorMessage(err));
     } finally {
       setJoining(false);
     }
@@ -154,8 +138,7 @@ export default function HomePage() {
       // Auto-retry session creation
       await handleConfirmCreate();
     } catch (err) {
-      const parsed = parseApiError(err);
-      setUpgradeError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+      setUpgradeError(getApiErrorMessage(err));
     } finally {
       setUpgrading(false);
     }

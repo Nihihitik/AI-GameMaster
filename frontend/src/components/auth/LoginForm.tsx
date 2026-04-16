@@ -3,8 +3,7 @@ import Input from '../ui/Input';
 import Button, { LinkButton } from '../ui/Button';
 import { authApi } from '../../api/authApi';
 import { useAuthStore } from '../../stores/authStore';
-import { parseApiError } from '../../utils/parseApiError';
-import { ERROR_MESSAGES } from '../../utils/constants';
+import { getApiErrorMessage } from '../../utils/getApiErrorMessage';
 
 interface LoginFormProps {
   onToggle: () => void;
@@ -41,8 +40,7 @@ export default function LoginForm({ onToggle }: LoginFormProps) {
       });
       // AuthPage will handle redirect
     } catch (err) {
-      const parsed = parseApiError(err);
-      setError(ERROR_MESSAGES[parsed.code] || parsed.message);
+      setError(getApiErrorMessage(err));
     } finally {
       setLoading(false);
     }

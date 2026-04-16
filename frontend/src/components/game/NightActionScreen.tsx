@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useGameStore, CheckResultEntry } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import PauseButton from './PauseButton';
+import { useCountdown } from '../../hooks/useCountdown';
 import './NightActionScreen.scss';
 
 export default function NightActionScreen() {
@@ -18,34 +19,17 @@ export default function NightActionScreen() {
   const nightActionTimer = useSessionStore((s) => s.settings.night_action_timer_seconds);
   const timerPaused = useSessionStore((s) => s.timerPaused);
 
-  const [timeLeft, setTimeLeft] = useState(nightActionTimer);
   const [showCheckResult, setShowCheckResult] = useState<CheckResultEntry | null>(null);
   const [hiddenResults, setHiddenResults] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastCheckCountRef = useRef(checkResults.length);
-
-  // Sync timer with backend timer_started_at (survives refresh & resume).
-  useEffect(() => {
-    const timerSec = phase?.timer_seconds ?? nightActionTimer;
-    const startedAt = phase?.timer_started_at;
-    if (!startedAt) { setTimeLeft(timerSec); return; }
-    const startedMs = Date.parse(startedAt);
-    if (Number.isNaN(startedMs)) { setTimeLeft(timerSec); return; }
-    const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
-    setTimeLeft(Math.max(0, timerSec - elapsed));
-  }, [actionType, phase?.timer_seconds, phase?.timer_started_at, nightActionTimer]);
-
-  useEffect(() => {
-    if (timeLeft <= 0 || timerPaused) {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      return;
-    }
-    intervalRef.current = setInterval(() => {
-      setTimeLeft((t) => (t <= 1 ? 0 : t - 1));
-    }, 1000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [timeLeft, timerPaused]);
+  const timeLeft = useCountdown({
+    paused: timerPaused,
+    fallbackSeconds: nightActionTimer,
+    timerSeconds: phase?.timer_seconds,
+    timerStartedAt: phase?.timer_started_at,
+    resetKey: `${phase?.id ?? ''}|${actionType ?? ''}`,
+  });
 
   // Surface a newly arrived check result (from WS or inline response).
   useEffect(() => {

@@ -5,7 +5,7 @@ import { authApi } from '../api/authApi';
 import { subscriptionsApi } from '../api/subscriptionsApi';
 import { SubscriptionStatusResponse } from '../types/api';
 import { parseApiError } from '../utils/parseApiError';
-import { ERROR_MESSAGES } from '../utils/constants';
+import { getApiErrorMessage } from '../utils/getApiErrorMessage';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import './ProfilePage.scss';
@@ -121,13 +121,12 @@ export default function ProfilePage() {
     setNicknameSaving(true);
     setNicknameError('');
     try {
-      const { data } = await authApi.updateNickname({ nickname: trimmed });
+      await authApi.updateNickname({ nickname: trimmed });
       const me = await authApi.me();
-      useAuthStore.getState().setUser(me.data);
+      setUser(me.data);
       setIsEditingNickname(false);
-    } catch (err: any) {
-      const parsed = parseApiError(err);
-      setNicknameError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+    } catch (err) {
+      setNicknameError(getApiErrorMessage(err));
     } finally {
       setNicknameSaving(false);
     }

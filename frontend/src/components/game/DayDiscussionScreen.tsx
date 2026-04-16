@@ -1,26 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import PauseButton from './PauseButton';
+import { useCountdown } from '../../hooks/useCountdown';
 import './DayDiscussionScreen.scss';
-
-/**
- * Compute remaining seconds from phase.timer_seconds + phase.timer_started_at.
- * If the server already kicked off the timer a while ago, align the UI
- * countdown instead of starting fresh.
- */
-function computeRemainingSeconds(
-  timerSeconds: number | null | undefined,
-  timerStartedAt: string | null | undefined,
-  fallback: number,
-): number {
-  if (!timerSeconds) return fallback;
-  if (!timerStartedAt) return timerSeconds;
-  const startedMs = Date.parse(timerStartedAt);
-  if (Number.isNaN(startedMs)) return timerSeconds;
-  const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
-  return Math.max(0, timerSeconds - elapsed);
-}
 
 export default function DayDiscussionScreen() {
   const players = useGameStore((s) => s.players);
@@ -30,29 +13,13 @@ export default function DayDiscussionScreen() {
   const phase = useGameStore((s) => s.phase);
   const discussionTimer = useSessionStore((s) => s.settings.discussion_timer_seconds);
   const timerPaused = useSessionStore((s) => s.timerPaused);
-
-  const [timeLeft, setTimeLeft] = useState(discussionTimer);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    const remaining = computeRemainingSeconds(
-      phase?.timer_seconds,
-      phase?.timer_started_at,
-      discussionTimer,
-    );
-    setTimeLeft(remaining);
-  }, [phase?.id, phase?.timer_seconds, phase?.timer_started_at, discussionTimer]);
-
-  useEffect(() => {
-    if (timeLeft <= 0 || timerPaused) {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      return;
-    }
-    intervalRef.current = setInterval(() => {
-      setTimeLeft((t) => (t <= 1 ? 0 : t - 1));
-    }, 1000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [timeLeft, timerPaused]);
+  const timeLeft = useCountdown({
+    paused: timerPaused,
+    fallbackSeconds: discussionTimer,
+    timerSeconds: phase?.timer_seconds,
+    timerStartedAt: phase?.timer_started_at,
+    resetKey: phase?.id ?? 'discussion',
+  });
 
   const formatTime = (s: number) => {
     const m = Math.floor(s / 60);

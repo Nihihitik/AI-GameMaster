@@ -2,6 +2,8 @@ import { WS_BASE_URL } from '../utils/constants';
 import { useAuthStore } from '../stores/authStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useGameStore } from '../stores/gameStore';
+import { SessionSettings } from '../types/game';
+import { PlayerInList } from '../types/api';
 
 /**
  * Синглтон WebSocket-клиента для игровой сессии.
@@ -16,14 +18,27 @@ import { useGameStore } from '../stores/gameStore';
  *                    setActionSubmitted, addCheckResult, queueAnnouncement, setResult
  */
 
-type WsMessage = { type: string; payload: any };
+type WsMessage = { type: string; payload?: unknown };
+type WsPayloadRecord = Record<string, unknown>;
+
+function isPayloadRecord(payload: unknown): payload is WsPayloadRecord {
+  return typeof payload === 'object' && payload !== null;
+}
+
+function getPayloadString(payload: unknown, key: string): string | undefined {
+  if (!isPayloadRecord(payload)) {
+    return undefined;
+  }
+
+  const value = payload[key];
+  return typeof value === 'string' ? value : undefined;
+}
 
 /** Локальный обработчик персонального кика: логаут не нужен, просто редирект и reset. */
-function handleKicked(_payload: any) {
+function handleKicked() {
   // Отвязываем текущую сессию из сторов.
   try {
-    // reset sessionStore (метод добавит другой агент)
-    (useSessionStore.getState() as any).reset?.();
+    useSessionStore.getState().reset();
   } catch {
     // ignore
   }
@@ -64,8 +79,16 @@ class WsClient {
 
     this.socket.onmessage = (e: MessageEvent) => {
       try {
-        const parsed: WsMessage = JSON.parse(e.data);
-        this.dispatch(parsed);
+        const parsed = JSON.parse(e.data) as unknown;
+        if (!isPayloadRecord(parsed) || typeof parsed.type !== 'string') {
+          console.warn('[wsClient] invalid message', parsed);
+          return;
+        }
+
+        this.dispatch({
+          type: parsed.type,
+          payload: parsed.payload,
+        });
       } catch (err) {
         console.warn('[wsClient] failed to parse message', err, e.data);
       }
@@ -113,25 +136,39 @@ class WsClient {
   }
 
   private dispatch(msg: WsMessage): void {
-    const sessionStore = useSessionStore.getState() as any;
-    const gameStore = useGameStore.getState() as any;
+    const sessionStore = useSessionStore.getState();
+    const gameStore = useGameStore.getState();
 
     switch (msg.type) {
       case 'player_joined':
-        return sessionStore.upsertPlayer?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return sessionStore.upsertPlayer(msg.payload as unknown as PlayerInList);
+        }
+        return;
 
       case 'player_left':
-      case 'player_kicked':
-        return sessionStore.removePlayer?.(msg.payload?.player_id);
+      case 'player_kicked': {
+        const playerId = getPayloadString(msg.payload, 'player_id');
+        if (playerId) {
+          return sessionStore.removePlayer(playerId);
+        }
+        return;
+      }
 
       case 'settings_updated': {
         // Hook: either applySessionSettings (preferred, local-only setter)
         // or setSettings (may be an async API call in the current store).
-        const settings = msg.payload?.settings ?? msg.payload;
-        if (typeof sessionStore.applySessionSettings === 'function') {
-          return sessionStore.applySessionSettings(settings);
+        const settings = isPayloadRecord(msg.payload) && 'settings' in msg.payload
+          ? msg.payload.settings
+          : msg.payload;
+        if (!isPayloadRecord(settings)) {
+          return;
         }
-        return sessionStore.setSettings?.(settings);
+        if (typeof sessionStore.applySessionSettings === 'function') {
+          return sessionStore.applySessionSettings(settings as unknown as SessionSettings);
+        }
+        void sessionStore.setSettings(settings as Partial<SessionSettings>);
+        return;
       }
 
       case 'session_closed':
@@ -142,55 +179,97 @@ class WsClient {
         return;
 
       case 'kicked':
-        return handleKicked(msg.payload);
+        return handleKicked();
 
       case 'game_started':
-        return gameStore.onGameStarted?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.onGameStarted(msg.payload);
+        }
+        return;
 
       case 'role_assigned':
-        return gameStore.setMyRole?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.setMyRole(msg.payload);
+        }
+        return;
 
       case 'phase_changed':
-        return gameStore.applyPhase?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.applyPhase(msg.payload);
+        }
+        return;
 
       case 'action_required':
-        return gameStore.applyActionRequired?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.applyActionRequired(msg.payload);
+        }
+        return;
 
       case 'action_blocked':
-        return gameStore.applyActionBlocked?.(msg.payload);
+        return gameStore.applyActionBlocked();
 
       case 'action_timeout':
-        return gameStore.applyActionTimeout?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.applyActionTimeout(msg.payload);
+        }
+        return;
 
       case 'role_acknowledged':
-        return gameStore.applyRoleAcknowledged?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.applyRoleAcknowledged(msg.payload);
+        }
+        return;
 
       case 'all_acknowledged':
-        return gameStore.applyAllAcknowledged?.();
+        return gameStore.applyAllAcknowledged();
 
       case 'night_result':
-        return gameStore.applyNightResult?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.applyNightResult(msg.payload);
+        }
+        return;
 
       case 'vote_update':
-        return gameStore.setVoteCounts?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.setVoteCounts(msg.payload);
+        }
+        return;
 
       case 'vote_result':
-        return gameStore.applyVoteResult?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.applyVoteResult(msg.payload);
+        }
+        return;
 
       case 'player_eliminated':
-        return gameStore.markEliminated?.(msg.payload?.player_id);
+        {
+          const playerId = getPayloadString(msg.payload, 'player_id');
+          if (playerId) {
+            return gameStore.markEliminated(playerId);
+          }
+          return;
+        }
 
       case 'action_confirmed':
-        return gameStore.setActionSubmitted?.(true);
+        return gameStore.setActionSubmitted(true);
 
       case 'check_result':
-        return gameStore.addCheckResult?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.addCheckResult(msg.payload);
+        }
+        return;
 
       case 'announcement':
-        return gameStore.queueAnnouncement?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.queueAnnouncement(msg.payload);
+        }
+        return;
 
       case 'game_finished':
-        return gameStore.setResult?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          return gameStore.setResult(msg.payload);
+        }
+        return;
 
       case 'game_paused':
         sessionStore.timerPaused !== true && useSessionStore.setState({ timerPaused: true });
@@ -199,13 +278,15 @@ class WsClient {
       case 'game_resumed':
         useSessionStore.setState({ timerPaused: false });
         // Update phase timer info so screens can sync the countdown.
-        gameStore.applyPhase?.(msg.payload);
+        if (isPayloadRecord(msg.payload)) {
+          gameStore.applyPhase(msg.payload);
+        }
         return;
 
       case 'session_reset': {
         // Host reset game → all players go back to lobby.
-        const code = msg.payload?.session_code;
-        gameStore.reset?.();
+        const code = getPayloadString(msg.payload, 'session_code');
+        gameStore.reset();
         if (code && typeof window !== 'undefined') {
           window.location.href = `/lobby/${code}`;
         }

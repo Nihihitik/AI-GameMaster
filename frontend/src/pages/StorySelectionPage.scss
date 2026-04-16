@@ -43,6 +43,12 @@
       width: 18px;
       height: 18px;
     }
+
+    &.pause-btn--paused {
+      border-color: rgba(200, 30, 30, 0.4);
+      color: #ff4444;
+      background: rgba(200, 30, 30, 0.1);
+    }
   }
 
   &__title {

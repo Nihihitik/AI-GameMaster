@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useGameStore } from '../stores/gameStore';
 import { useSessionStore } from '../stores/sessionStore';
-import { parseApiError } from '../utils/parseApiError';
-import { ERROR_MESSAGES } from '../utils/constants';
+import { getApiErrorMessage } from '../utils/getApiErrorMessage';
 import { wsClient } from '../api/wsClient';
 import { getRoleInfo, CARD_BACK_IMAGE } from '../utils/roles';
 import NarratorScreen from '../components/game/NarratorScreen';
@@ -12,9 +11,11 @@ import NightWaitingScreen from '../components/game/NightWaitingScreen';
 import DayDiscussionScreen from '../components/game/DayDiscussionScreen';
 import DayVotingScreen from '../components/game/DayVotingScreen';
 import FinaleScreen from '../components/game/FinaleScreen';
+import PauseButton from '../components/game/PauseButton';
 import RulesModal, { RulesButton } from '../components/game/RulesModal';
 import Button from '../components/ui/Button';
 import Loader from '../components/ui/Loader';
+import { useCountdown } from '../hooks/useCountdown';
 import './GamePage.scss';
 
 function NightActionIcon({ action }: { action: string }) {
@@ -73,16 +74,22 @@ export default function GamePage() {
   const acknowledgeRoleAsync = useGameStore((s) => s.acknowledgeRole);
 
   const timerPaused = useSessionStore((s) => s.timerPaused);
-  const setTimerPaused = useSessionStore((s) => s.setTimerPaused);
   const roleRevealTimer = useSessionStore((s) => s.settings.role_reveal_timer_seconds);
 
   const [showRules, setShowRules] = useState(false);
   const [flipped, setFlipped] = useState(false);
   const [showAbilities, setShowAbilities] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoAcknowledgeRef = useRef(false);
+  const timeLeft = useCountdown({
+    enabled: screen === 'role_reveal',
+    paused: timerPaused || acknowledged,
+    fallbackSeconds: roleRevealTimer,
+    timerSeconds: phase?.timer_seconds,
+    timerStartedAt: phase?.timer_started_at,
+    resetKey: phase?.id ?? screen,
+  });
 
   // Load game state + open WebSocket on mount.
   useEffect(() => {
@@ -108,10 +115,9 @@ export default function GamePage() {
           return;
         }
         wsClient.connect(sessionId);
-      } catch (err: any) {
+      } catch (err) {
         if (!cancelled) {
-          const parsed = parseApiError(err);
-          setLoadError(ERROR_MESSAGES[parsed.code as keyof typeof ERROR_MESSAGES] ?? parsed.message);
+          setLoadError(getApiErrorMessage(err));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -122,8 +128,7 @@ export default function GamePage() {
       cancelled = true;
       wsClient.disconnect();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [navigate, sessionId]);
 
   // Auto-flip card if already acknowledged (e.g. after page refresh).
   useEffect(() => {
@@ -131,42 +136,26 @@ export default function GamePage() {
       setFlipped(true);
       setShowAbilities(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, acknowledged]);
 
-  // Role reveal timer — sync with backend timer_started_at.
   useEffect(() => {
-    if (screen !== 'role_reveal') return;
-    const timerSec = phase?.timer_seconds ?? roleRevealTimer;
-    const startedAt = phase?.timer_started_at;
-    if (!timerSec) { setTimeLeft(roleRevealTimer); return; }
-    if (!startedAt) { setTimeLeft(timerSec); return; }
-    const startedMs = Date.parse(startedAt);
-    if (Number.isNaN(startedMs)) { setTimeLeft(timerSec); return; }
-    const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
-    setTimeLeft(Math.max(0, timerSec - elapsed));
-  }, [screen, phase?.id, phase?.timer_seconds, phase?.timer_started_at, roleRevealTimer]);
-
-  useEffect(() => {
-    if (screen !== 'role_reveal') return;
-    if (timeLeft <= 0 || timerPaused || acknowledged) {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+    if (screen !== 'role_reveal') {
+      autoAcknowledgeRef.current = false;
       return;
     }
-    intervalRef.current = setInterval(() => {
-      setTimeLeft((t) => {
-        if (t <= 1) {
-          if (!acknowledged) {
-            acknowledgeRoleAsync().catch(() => {});
-          }
-          return 0;
-        }
-        return t - 1;
-      });
-    }, 1000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen, timeLeft, timerPaused, acknowledged]);
+
+    if (timerPaused || timeLeft > 0 || acknowledged) {
+      autoAcknowledgeRef.current = false;
+      return;
+    }
+
+    if (autoAcknowledgeRef.current) {
+      return;
+    }
+
+    autoAcknowledgeRef.current = true;
+    acknowledgeRoleAsync().catch(() => {});
+  }, [acknowledgeRoleAsync, acknowledged, screen, timeLeft, timerPaused]);
 
   const handleFlip = () => {
     if (!flipped) {
@@ -206,6 +195,14 @@ export default function GamePage() {
   const roleImage = roleInfo?.image ?? CARD_BACK_IMAGE;
   const roleDesc = roleInfo?.description ?? 'Роль без описания способностей.';
   const nightAction = myRole.abilities?.night_action;
+  const renderGameScreen = (content: React.ReactNode) => (
+    <div className="game-screen-wrapper">
+      <div className="game-screen-header">
+        <RulesButton onClick={() => setShowRules(true)} />
+      </div>
+      {content}
+    </div>
+  );
 
   // Render based on current screen
   const renderScreen = () => {
@@ -221,13 +218,7 @@ export default function GamePage() {
         return (
           <div className={`role-page ${!flipped ? 'role-page--preflip' : ''}`}>
             <header className="role-header">
-              <button className="role-header__pause" onClick={() => setTimerPaused(!timerPaused)}>
-                {timerPaused ? (
-                  <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21" /></svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
-                )}
-              </button>
+              <PauseButton className="role-header__pause" />
               <h1 className="role-header__title">Ваша роль</h1>
               <div className="game-header-right">
                 <RulesButton onClick={() => setShowRules(true)} />
@@ -293,54 +284,19 @@ export default function GamePage() {
         );
 
       case 'narrator':
-        return (
-          <div className="game-screen-wrapper">
-            <div className="game-screen-header">
-              <RulesButton onClick={() => setShowRules(true)} />
-            </div>
-            <NarratorScreen />
-          </div>
-        );
+        return renderGameScreen(<NarratorScreen />);
 
       case 'night_action':
-        return (
-          <div className="game-screen-wrapper">
-            <div className="game-screen-header">
-              <RulesButton onClick={() => setShowRules(true)} />
-            </div>
-            <NightActionScreen />
-          </div>
-        );
+        return renderGameScreen(<NightActionScreen />);
 
       case 'night_waiting':
-        return (
-          <div className="game-screen-wrapper">
-            <div className="game-screen-header">
-              <RulesButton onClick={() => setShowRules(true)} />
-            </div>
-            <NightWaitingScreen />
-          </div>
-        );
+        return renderGameScreen(<NightWaitingScreen />);
 
       case 'day_discussion':
-        return (
-          <div className="game-screen-wrapper">
-            <div className="game-screen-header">
-              <RulesButton onClick={() => setShowRules(true)} />
-            </div>
-            <DayDiscussionScreen />
-          </div>
-        );
+        return renderGameScreen(<DayDiscussionScreen />);
 
       case 'day_voting':
-        return (
-          <div className="game-screen-wrapper">
-            <div className="game-screen-header">
-              <RulesButton onClick={() => setShowRules(true)} />
-            </div>
-            <DayVotingScreen />
-          </div>
-        );
+        return renderGameScreen(<DayVotingScreen />);
 
       case 'finale':
         return (
