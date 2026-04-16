@@ -13,6 +13,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.utils import safe_uuid
 from models.game_event import GameEvent
 from models.game_phase import GamePhase
 from services.runtime_state import runtime_state
@@ -76,15 +77,6 @@ def parse_iso_dt(value: str | None) -> datetime | None:
         return None
 
 
-def _safe_uuid(raw) -> uuid.UUID | None:
-    if raw is None:
-        return None
-    try:
-        return uuid.UUID(str(raw))
-    except Exception:
-        return None
-
-
 async def restore_runtime_like_fields(
     db: AsyncSession, session_id: uuid.UUID, phase: GamePhase | None
 ) -> dict:
@@ -118,7 +110,7 @@ async def restore_runtime_like_fields(
         blocked_raw = payload.get("blocked_tonight") or []
         restored_blocked: set[uuid.UUID] = set()
         for item in blocked_raw:
-            u = _safe_uuid(item)
+            u = safe_uuid(item)
             if u is not None:
                 restored_blocked.add(u)
         if restored_blocked and not rt.blocked_tonight:
@@ -135,12 +127,12 @@ async def restore_runtime_like_fields(
         .limit(1)
     )
     if last_night_result and isinstance(last_night_result.payload, dict):
-        llt = _safe_uuid(last_night_result.payload.get("lover_last_target"))
+        llt = safe_uuid(last_night_result.payload.get("lover_last_target"))
         if llt is not None and rt.lover_last_target is None:
             rt.lover_last_target = llt
         # day_blocked_player восстанавливаем только для текущего дня.
         if phase.phase_type == "day" and last_night_result.phase_id is not None:
-            dbp = _safe_uuid(last_night_result.payload.get("day_blocked_player"))
+            dbp = safe_uuid(last_night_result.payload.get("day_blocked_player"))
             if dbp is not None and rt.day_blocked_player is None:
                 rt.day_blocked_player = dbp
 
@@ -152,7 +144,7 @@ async def restore_runtime_like_fields(
     if isinstance(candidate_ids_raw, list):
         restored_candidate_ids = []
         for item in candidate_ids_raw:
-            u = _safe_uuid(item)
+            u = safe_uuid(item)
             if u is not None:
                 restored_candidate_ids.append(u)
         if restored_candidate_ids and not rt.voting_candidate_ids:

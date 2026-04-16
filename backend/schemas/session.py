@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
+from schemas.validators import strip_name_value
+
 
 class RoleConfig(BaseModel):
     mafia: int = Field(ge=0)
@@ -28,10 +30,7 @@ class CreateSessionRequest(BaseModel):
     @field_validator("host_name")
     @classmethod
     def strip_host_name(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        s = v.strip()
-        return s[:32] if s else None
+        return strip_name_value(v)
 
 
 class SessionResponse(BaseModel):
@@ -71,10 +70,7 @@ class JoinRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def strip_name(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        s = v.strip()
-        return s if s else None
+        return strip_name_value(v)
 
 
 class JoinResponse(BaseModel):

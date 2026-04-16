@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import random
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy import String, cast, delete, exists, func, select
 from sqlalchemy.exc import IntegrityError
@@ -20,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from core.exceptions import GameError
+from core.utils import utc_now
 from models.game_event import GameEvent
 from models.game_phase import GamePhase
 from models.night_action import NightAction
@@ -43,10 +43,6 @@ from services.narration_script import (
 from services.timer_service import timer_service
 from services.runtime_state import runtime_state
 from services.ws_manager import ws_manager
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _role_config(session: Session) -> dict:
@@ -95,7 +91,7 @@ async def _wait_or_pause(session_id: uuid.UUID, seconds: float) -> None:
 async def _set_runtime_announcement(session_id: uuid.UUID, announcement: dict | None) -> None:
     rt = runtime_state.get(session_id)
     rt.current_announcement = announcement
-    rt.announcement_started_at = _now() if announcement else None
+    rt.announcement_started_at = utc_now() if announcement else None
 
 
 async def _emit_phase_changed(
@@ -245,7 +241,7 @@ async def start_game(db: AsyncSession, session: Session) -> None:
         session_id=session.id,
         phase_type="role_reveal",
         phase_number=0,
-        started_at=_now(),
+        started_at=utc_now(),
         ended_at=None,
     )
     db.add(phase)
@@ -419,7 +415,7 @@ async def transition_to_night(session_id: uuid.UUID, phase_number: int):
                 session_id=session_id,
                 phase_type="night",
                 phase_number=phase_number,
-                started_at=_now(),
+                started_at=utc_now(),
                 ended_at=None,
             )
             db.add(phase)
@@ -679,7 +675,7 @@ async def execute_night_sequence(
         rt.night_turn = turn_slug
         rt.timer_name = f"night_{turn_slug}"
         rt.timer_seconds = seconds_for_turn
-        rt.timer_started_at = _now()
+        rt.timer_started_at = utc_now()
         rt.night_action_event.clear()
 
         phase_payload = {
@@ -1024,7 +1020,7 @@ async def transition_to_day(session_id: uuid.UUID, phase_number: int):
                 session_id=session_id,
                 phase_type="day",
                 phase_number=phase_number,
-                started_at=_now(),
+                started_at=utc_now(),
                 ended_at=None,
             )
             db.add(phase)
@@ -1057,7 +1053,7 @@ async def transition_to_day(session_id: uuid.UUID, phase_number: int):
             rt.voting_candidate_ids = None
             rt.timer_name = "discussion"
             rt.timer_seconds = discussion_seconds
-            rt.timer_started_at = _now()
+            rt.timer_started_at = utc_now()
             try:
                 await _emit_phase_changed(
                     session_id,
@@ -1151,7 +1147,7 @@ async def transition_to_voting(
                 if rt.game_paused:
                     return
 
-            rt.timer_started_at = _now()
+            rt.timer_started_at = utc_now()
             await _persist_phase_changed(
                 db,
                 session_id,
@@ -1454,13 +1450,13 @@ async def finish_game(
     before_voting: bool = False,
 ) -> None:
     session.status = "finished"
-    session.ended_at = _now()
+    session.ended_at = utc_now()
     cur = dict(session.settings or {})
     cur.pop("game_pause", None)
     session.settings = cur
     phase = await get_current_phase(db, session.id)
     if phase and phase.ended_at is None:
-        phase.ended_at = _now()
+        phase.ended_at = utc_now()
 
     players = (
         await db.scalars(select(Player).options(selectinload(Player.role)).where(Player.session_id == session.id))

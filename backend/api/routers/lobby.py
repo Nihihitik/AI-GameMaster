@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.deps import get_current_user, get_db
-from api.routers.sessions import _validate_role_config
+from api.deps import get_current_user, get_db, get_player_or_404, get_session_or_404, require_host
 from core.exceptions import GameError
 from models.game_event import GameEvent
 from models.player import Player
@@ -17,6 +17,7 @@ from models.session import Session
 from schemas.session import PlayerInList, UpdateSettingsRequest
 from services.game_engine import apply_host_kick
 from services.pause_service import pause_game, resume_game
+from services.session_service import validate_role_config
 from services.timer_service import timer_service
 from services.runtime_state import runtime_state
 from services.ws_manager import ws_manager
@@ -31,9 +32,7 @@ async def list_players(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
+    session = await get_session_or_404(db, session_id)
 
     players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
     items = [
@@ -55,17 +54,11 @@ async def leave_lobby(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
+    session = await get_session_or_404(db, session_id)
     if session.status != "waiting":
         raise GameError(409, "game_already_started", "Игра уже началась")
 
-    player = await db.scalar(
-        select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
-    )
-    if player is None:
-        raise GameError(404, "player_not_found", "Игрок не найден в этой сессии")
+    player = await get_player_or_404(db, session_id, current_user.id)
 
     pid = player.id
     await db.delete(player)
@@ -92,11 +85,8 @@ async def kick_player(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
-    if session.host_user_id != current_user.id:
-        raise GameError(403, "not_host", "Только организатор может выполнить это действие")
+    session = await get_session_or_404(db, session_id)
+    require_host(session, current_user.id)
 
     player = await db.scalar(select(Player).where(Player.session_id == session_id, Player.id == player_id))
     if player is None:
@@ -145,15 +135,10 @@ async def close_session(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
-    if session.host_user_id != current_user.id:
-        raise GameError(403, "not_host", "Только организатор может выполнить это действие")
+    session = await get_session_or_404(db, session_id)
+    require_host(session, current_user.id)
 
     session.status = "finished"
-    from datetime import datetime, timezone
-
     session.ended_at = datetime.now(timezone.utc)
     cur_settings = dict(session.settings or {})
     cur_settings.pop("game_pause", None)
@@ -183,11 +168,8 @@ async def update_settings(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
-    if session.host_user_id != current_user.id:
-        raise GameError(403, "not_host", "Только организатор может выполнить это действие")
+    session = await get_session_or_404(db, session_id)
+    require_host(session, current_user.id)
     if session.status != "waiting":
         raise GameError(409, "game_already_started", "Игра уже началась")
 
@@ -196,7 +178,7 @@ async def update_settings(
     # role_config валидация (если передана)
     if patch.get("role_config") is not None:
         rc = patch["role_config"]
-        civilian = _validate_role_config(session.player_count, rc)
+        civilian = validate_role_config(session.player_count, rc)
         patch["role_config"] = {**rc, "civilian": civilian}
 
     session.settings = {**current, **patch}
@@ -215,10 +197,8 @@ async def pause_session(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
-    # Любой игрок сессии может поставить паузу.
+    session = await get_session_or_404(db, session_id)
+    # Любой игрок сессии может поставить паузу (403, не 404).
     player = await db.scalar(
         select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
     )
@@ -233,10 +213,8 @@ async def resume_session(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
-    # Любой игрок сессии может снять паузу.
+    session = await get_session_or_404(db, session_id)
+    # Любой игрок сессии может снять паузу (403, не 404).
     player = await db.scalar(
         select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
     )

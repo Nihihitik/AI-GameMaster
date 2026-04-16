@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from api.deps import get_current_user, get_db
+from api.deps import get_current_user, get_db, has_active_pro
 from core.exceptions import GameError
 from models.game_event import GameEvent
 from models.player import Player
 from models.session import Session
-from models.subscription import Subscription
 from schemas.session import (
     CreateSessionRequest,
     JoinRequest,
@@ -24,58 +22,11 @@ from schemas.session import (
     SessionDetailResponse,
     SessionResponse,
 )
-from services.session_service import generate_unique_code
+from services.session_service import generate_unique_code, validate_role_config
 from services.ws_manager import ws_manager
 
 
 router = APIRouter()
-
-
-def _validate_role_config(player_count: int, role_config: dict) -> int:
-    """Валидирует конфигурацию ролей и возвращает итоговое число мирных.
-
-    Баланс:
-      mafia_count = mafia + don
-      city_count  = player_count - mafia_count - maniac
-    Требуется: mafia_count >= 1 и mafia_count < city_count.
-    Маньяк — отдельная команда, но в балансе "мафия vs. город" считается
-    отдельно от города (он не союзник ни тем, ни другим).
-    """
-    mafia = int(role_config.get("mafia", 0))
-    don = int(role_config.get("don", 0))
-    sheriff = int(role_config.get("sheriff", 0))
-    doctor = int(role_config.get("doctor", 0))
-    lover = int(role_config.get("lover", 0))
-    maniac = int(role_config.get("maniac", 0))
-
-    mafia_count = mafia + don
-    if mafia_count < 1:
-        raise GameError(400, "invalid_role_config", "Должна быть хотя бы одна мафия")
-
-    city_count = player_count - mafia_count - maniac
-    if city_count <= 0:
-        raise GameError(400, "invalid_role_config", "Недостаточно мест для города")
-    if mafia_count >= city_count:
-        raise GameError(400, "invalid_role_config", "Мафия должна быть строго меньше города")
-
-    civilian = player_count - mafia - don - sheriff - doctor - lover - maniac
-    if civilian < 0:
-        raise GameError(400, "invalid_role_config", "Некорректная конфигурация ролей")
-
-    return civilian
-
-
-async def _has_pro(db: AsyncSession, user_id: uuid.UUID) -> bool:
-    now = datetime.now(timezone.utc)
-    exists = await db.scalar(
-        select(Subscription.id).where(
-            Subscription.user_id == user_id,
-            Subscription.plan == "pro",
-            Subscription.status == "active",
-            Subscription.period_end > now,
-        )
-    )
-    return exists is not None
 
 
 @router.post("", response_model=SessionResponse, status_code=201)
@@ -84,11 +35,11 @@ async def create_session(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> SessionResponse:
-    if payload.player_count > 12 and not await _has_pro(db, current_user.id):
+    if payload.player_count > 12 and not await has_active_pro(db, current_user.id):
         raise GameError(403, "pro_required", "Для этого количества игроков нужна подписка Pro")
 
     role_cfg = payload.settings.role_config.model_dump()
-    civilian = _validate_role_config(payload.player_count, role_cfg)
+    civilian = validate_role_config(payload.player_count, role_cfg)
 
     settings = payload.settings.model_dump()
     settings["role_config"] = {**role_cfg, "civilian": civilian}

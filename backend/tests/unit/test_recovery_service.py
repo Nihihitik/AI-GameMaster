@@ -1,49 +1,9 @@
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-import types
 
 import pytest
-from sqlalchemy.orm import DeclarativeBase
-
-fastapi_stub = types.ModuleType("fastapi")
-fastapi_stub.Request = object
-fastapi_stub.WebSocket = object
-fastapi_responses_stub = types.ModuleType("fastapi.responses")
-fastapi_responses_stub.JSONResponse = object
-pydantic_stub = types.ModuleType("pydantic")
-pydantic_stub.Field = lambda default=None, **kwargs: default
-pydantic_settings_stub = types.ModuleType("pydantic_settings")
-
-
-class _BaseSettings:
-    def __init__(self, **kwargs):
-        for name, value in self.__class__.__dict__.items():
-            if name.startswith("_") or isinstance(value, property) or callable(value):
-                continue
-            setattr(self, name, kwargs.get(name, value))
-
-
-pydantic_settings_stub.BaseSettings = _BaseSettings
-pydantic_settings_stub.SettingsConfigDict = dict
-core_database_stub = types.ModuleType("core.database")
-
-
-class _Base(DeclarativeBase):
-    pass
-
-
-core_database_stub.Base = _Base
-core_database_stub.async_session_factory = object()
-core_database_stub.async_session_maker = object()
-
-sys.modules.setdefault("fastapi", fastapi_stub)
-sys.modules.setdefault("fastapi.responses", fastapi_responses_stub)
-sys.modules.setdefault("pydantic", pydantic_stub)
-sys.modules.setdefault("pydantic_settings", pydantic_settings_stub)
-sys.modules.setdefault("core.database", core_database_stub)
 
 from services import recovery_service
 

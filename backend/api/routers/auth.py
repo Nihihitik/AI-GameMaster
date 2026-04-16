@@ -13,10 +13,9 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.deps import get_current_user, get_db
+from api.deps import get_current_user, get_db, has_active_pro
 from core.exceptions import GameError
 from models.refresh_token import RefreshToken
-from models.subscription import Subscription
 from models.user import User
 from schemas.auth import (
     AuthResponse,
@@ -151,20 +150,11 @@ async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -
 
 @router.get("/me", response_model=MeResponse)
 async def me(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> MeResponse:
-    now = datetime.now(timezone.utc)
-    has_pro = await db.scalar(
-        select(Subscription.id).where(
-            Subscription.user_id == current_user.id,
-            Subscription.plan == "pro",
-            Subscription.status == "active",
-            Subscription.period_end > now,
-        )
-    )
     return MeResponse(
         user_id=str(current_user.id),
         email=current_user.email,
         nickname=current_user.display_name,
-        has_pro=has_pro is not None,
+        has_pro=await has_active_pro(db, current_user.id),
         created_at=current_user.created_at.isoformat(),
     )
 
@@ -178,20 +168,11 @@ async def update_me_nickname(
     current_user.display_name = payload.nickname
     await db.commit()
     await db.refresh(current_user)
-    now = datetime.now(timezone.utc)
-    has_pro = await db.scalar(
-        select(Subscription.id).where(
-            Subscription.user_id == current_user.id,
-            Subscription.plan == "pro",
-            Subscription.status == "active",
-            Subscription.period_end > now,
-        )
-    )
     return MeResponse(
         user_id=str(current_user.id),
         email=current_user.email,
         nickname=current_user.display_name,
-        has_pro=has_pro is not None,
+        has_pro=await has_active_pro(db, current_user.id),
         created_at=current_user.created_at.isoformat(),
     )
 

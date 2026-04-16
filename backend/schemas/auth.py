@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from schemas.validators import strip_name_value
+
 
 class RegisterRequest(BaseModel):
     email: EmailStr
@@ -11,10 +13,7 @@ class RegisterRequest(BaseModel):
     @field_validator("nickname")
     @classmethod
     def strip_nickname(cls, v: str) -> str:
-        s = v.strip()
-        if not s:
-            raise ValueError("ник не может быть пустым")
-        return s[:32]
+        return strip_name_value(v, required=True)
 
 
 class LoginRequest(BaseModel):
@@ -53,10 +52,7 @@ class UpdateNicknameRequest(BaseModel):
     @field_validator("nickname")
     @classmethod
     def strip_nickname(cls, v: str) -> str:
-        s = v.strip()
-        if not s:
-            raise ValueError("ник не может быть пустым")
-        return s[:32]
+        return strip_name_value(v, required=True)
 
 
 class DeleteAccountRequest(BaseModel):

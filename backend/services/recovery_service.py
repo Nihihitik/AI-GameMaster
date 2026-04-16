@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy import select
 
 from core.database import async_session_factory
+from core.utils import remaining_seconds
 from models.game_phase import GamePhase
 from models.session import Session
 from services.game_engine import (
@@ -29,18 +29,6 @@ from services.game_engine import (
 from services.runtime_state import runtime_state
 from services.state_service import get_last_known_phase, restore_runtime_like_fields
 from services.timer_service import timer_service
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _remaining_seconds(timer_seconds: int | None, started_at: datetime | None) -> int | None:
-    if timer_seconds is None or started_at is None:
-        return None
-    elapsed = (_now() - started_at).total_seconds()
-    remaining = int(timer_seconds - elapsed)
-    return remaining
 
 
 async def _recover_one_session(session_id: uuid.UUID) -> None:
@@ -71,7 +59,7 @@ async def _recover_one_session(session_id: uuid.UUID) -> None:
         rt.timer_seconds = restored["timer_seconds"]
         rt.timer_started_at = restored["timer_started_at"]
 
-        remaining = _remaining_seconds(rt.timer_seconds, rt.timer_started_at)
+        remaining = remaining_seconds(rt.timer_seconds, rt.timer_started_at)
 
         # role_reveal timer
         if phase.phase_type == "role_reveal":

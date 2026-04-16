@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import async_session_factory
 from core.exceptions import GameError
+from core.utils import remaining_seconds, safe_uuid, utc_now
 from models.game_phase import GamePhase
 from models.session import Session
 from services.game_engine import execute_night_sequence, get_current_phase, resolve_votes, transition_to_voting
@@ -17,17 +17,6 @@ from services.timer_service import timer_service
 from services.ws_manager import ws_manager
 
 PAUSE_KEY = "game_pause"
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _remaining_timer_seconds(timer_seconds: int | None, started_at: datetime | None) -> int | None:
-    if timer_seconds is None or started_at is None:
-        return None
-    elapsed = (_now() - started_at).total_seconds()
-    return max(1, int(timer_seconds - elapsed))
 
 
 async def pause_game(db: AsyncSession, session: Session) -> dict:
@@ -42,7 +31,7 @@ async def pause_game(db: AsyncSession, session: Session) -> dict:
         raise GameError(409, "wrong_phase", "Нет активной фазы")
 
     rt = runtime_state.get(session.id)
-    remaining = _remaining_timer_seconds(rt.timer_seconds, rt.timer_started_at)
+    remaining = remaining_seconds(rt.timer_seconds, rt.timer_started_at)
 
     snap: dict = {
         "phase_type": phase.phase_type,
@@ -113,23 +102,15 @@ async def resume_game(session_id: uuid.UUID) -> None:
     if rem is None or rem < 1:
         rem = 1
 
-    def _safe_uuid(raw) -> uuid.UUID | None:
-        if raw is None:
-            return None
-        try:
-            return uuid.UUID(str(raw))
-        except Exception:
-            return None
-
-    rt.mafia_choice_target = _safe_uuid(snap.get("mafia_choice_target"))
-    rt.mafia_choice_by = _safe_uuid(snap.get("mafia_choice_by"))
-    rt.maniac_choice_target = _safe_uuid(snap.get("maniac_choice_target"))
-    rt.lover_last_target = _safe_uuid(snap.get("lover_last_target"))
-    rt.day_blocked_player = _safe_uuid(snap.get("day_blocked_player"))
+    rt.mafia_choice_target = safe_uuid(snap.get("mafia_choice_target"))
+    rt.mafia_choice_by = safe_uuid(snap.get("mafia_choice_by"))
+    rt.maniac_choice_target = safe_uuid(snap.get("maniac_choice_target"))
+    rt.lover_last_target = safe_uuid(snap.get("lover_last_target"))
+    rt.day_blocked_player = safe_uuid(snap.get("day_blocked_player"))
 
     restored_blocked: set[uuid.UUID] = set()
     for item in snap.get("blocked_tonight", []) or []:
-        u = _safe_uuid(item)
+        u = safe_uuid(item)
         if u is not None:
             restored_blocked.add(u)
     rt.blocked_tonight = restored_blocked
@@ -144,7 +125,7 @@ async def resume_game(session_id: uuid.UUID) -> None:
         rt.night_turn = None
         rt.timer_name = "role_reveal"
         rt.timer_seconds = rem
-        rt.timer_started_at = _now()
+        rt.timer_started_at = utc_now()
         await timer_service.start_timer(session_id, "role_reveal", rem, _on_timeout)
         await ws_manager.send_to_session(
             session_id,
@@ -162,7 +143,7 @@ async def resume_game(session_id: uuid.UUID) -> None:
 
     if ptype == "day":
         rt.day_sub_phase = snap.get("day_sub_phase") or "discussion"
-        rt.timer_started_at = _now()
+        rt.timer_started_at = utc_now()
         rt.timer_seconds = rem
         if rt.day_sub_phase == "discussion":
             rt.timer_name = "discussion"
@@ -196,7 +177,7 @@ async def resume_game(session_id: uuid.UUID) -> None:
 
     if ptype == "night":
         nt = str(snap.get("night_turn") or "mafia")
-        rt.timer_started_at = _now()
+        rt.timer_started_at = utc_now()
         rt.timer_seconds = rem
         await ws_manager.send_to_session(
             session_id,

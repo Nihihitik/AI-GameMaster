@@ -1,38 +1,37 @@
-from __future__ import annotations
-
-import uuid
-
 """Роуты игрового цикла (start/ночь/день/state).
 
 Содержит REST-эндпоинты, которые меняют состояние игры.
 WebSocket используется только для push-уведомлений.
 """
 
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.deps import get_current_user, get_db
+from api.deps import get_current_user, get_db, get_player_or_404, get_session_or_404, require_host
 from core.exceptions import GameError
+from core.utils import session_is_paused
 from models.day_vote import DayVote
+from models.game_event import GameEvent
 from models.game_phase import GamePhase
 from models.night_action import NightAction
 from models.player import Player
 from models.role import Role
 from models.session import Session
-from services.game_engine import acknowledge_role, get_current_phase, start_game, transition_to_voting
+from services.game_engine import acknowledge_role, get_current_phase, resolve_votes, start_game, transition_to_voting
 from services.recovery_service import recover_missing_phase
 from services.runtime_state import runtime_state
+from services.timer_service import timer_service
 from services.ws_manager import ws_manager
 from services.state_service import get_last_known_phase, restore_runtime_like_fields
 
 
 router = APIRouter()
-
-
-def _session_paused(settings: dict | None) -> bool:
-    gp = (settings or {}).get("game_pause")
-    return isinstance(gp, dict) and bool(gp.get("paused"))
 
 
 @router.post("/{session_id}/start")
@@ -41,11 +40,8 @@ async def start(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
-    if session.host_user_id != current_user.id:
-        raise GameError(403, "not_host", "Только организатор может выполнить это действие")
+    session = await get_session_or_404(db, session_id)
+    require_host(session, current_user.id)
 
     await start_game(db, session)
     return {"status": "active", "phase": {"type": "role_reveal", "number": 0}}
@@ -57,19 +53,13 @@ async def ack_role(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
-    if _session_paused(session.settings):
+    session = await get_session_or_404(db, session_id)
+    if session_is_paused(session.settings):
         raise GameError(403, "game_paused", "Игра на паузе")
     if session.status != "active":
         raise GameError(403, "wrong_phase", "Действие недоступно в текущей фазе")
 
-    player = await db.scalar(
-        select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
-    )
-    if player is None:
-        raise GameError(404, "player_not_found", "Игрок не найден в этой сессии")
+    player = await get_player_or_404(db, session_id, current_user.id)
 
     return await acknowledge_role(db, session, player)
 
@@ -81,17 +71,11 @@ async def night_action(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
-    if _session_paused(session.settings):
+    session = await get_session_or_404(db, session_id)
+    if session_is_paused(session.settings):
         raise GameError(403, "game_paused", "Игра на паузе")
 
-    player = await db.scalar(
-        select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
-    )
-    if player is None:
-        raise GameError(404, "player_not_found", "Игрок не найден в этой сессии")
+    player = await get_player_or_404(db, session_id, current_user.id)
     if player.status != "alive":
         raise GameError(403, "player_dead", "Выбывшие игроки не могут совершать действия")
 
@@ -260,16 +244,10 @@ async def vote(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
-    if _session_paused(session.settings):
+    session = await get_session_or_404(db, session_id)
+    if session_is_paused(session.settings):
         raise GameError(403, "game_paused", "Игра на паузе")
-    player = await db.scalar(
-        select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
-    )
-    if player is None:
-        raise GameError(404, "player_not_found", "Игрок не найден в этой сессии")
+    player = await get_player_or_404(db, session_id, current_user.id)
     if player.status != "alive":
         raise GameError(403, "player_dead", "Выбывшие игроки не могут совершать действия")
 
@@ -308,8 +286,6 @@ async def vote(
     await db.commit()
 
     # ws vote_update
-    from sqlalchemy import func
-
     votes_cast = await db.scalar(select(func.count(DayVote.id)).where(DayVote.phase_id == phase.id))
     # Exclude lover-blocked player from total so "all voted" check is correct.
     votes_total_q = select(func.count(Player.id)).where(Player.session_id == session_id, Player.status == "alive")
@@ -319,9 +295,6 @@ async def vote(
     await ws_manager.send_to_session(session_id, {"type": "vote_update", "payload": {"votes_cast": int(votes_cast or 0), "votes_total": int(votes_total or 0)}})
     if int(votes_cast or 0) >= int(votes_total or 0) and int(votes_total or 0) > 0:
         # закончить досрочно: отменяем таймер голосования и резолвим
-        from services.timer_service import timer_service
-        from services.game_engine import resolve_votes
-
         await timer_service.cancel_timer(session_id, "voting")
         await resolve_votes(session_id)
     return {"voter_player_id": str(player.id), "target_player_id": str(target_uuid) if target_uuid else None, "confirmed": True}
@@ -333,15 +306,8 @@ async def state(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
-
-    player = await db.scalar(
-        select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
-    )
-    if player is None:
-        raise GameError(404, "player_not_found", "Игрок не найден в этой сессии")
+    session = await get_session_or_404(db, session_id)
+    player = await get_player_or_404(db, session_id, current_user.id)
     if session.status == "waiting":
         raise GameError(403, "wrong_phase", "Игра ещё не началась")
 
@@ -377,7 +343,7 @@ async def state(
 
     all_players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
 
-    paused = _session_paused(session.settings)
+    paused = session_is_paused(session.settings)
     if paused:
         rt.game_paused = True
 
@@ -396,7 +362,6 @@ async def state(
         gp_snap = ((session.settings or {}).get("game_pause") or {}).get("snapshot") or {}
         snap_remaining = gp_snap.get("remaining_seconds")
         if snap_remaining is not None:
-            from datetime import datetime, timezone
             effective_timer_seconds = int(snap_remaining)
             effective_timer_started_at = datetime.now(timezone.utc).isoformat()
 
@@ -443,9 +408,6 @@ async def state(
         )
 
     if phase and phase.phase_type == "role_reveal":
-        from sqlalchemy import func
-        from models.game_event import GameEvent
-
         my_ack = await db.scalar(
             select(GameEvent.id).where(
                 GameEvent.session_id == session_id,
@@ -547,8 +509,6 @@ async def state(
             response["my_action_submitted"] = submitted is not None
 
     if phase and phase.phase_type == "day" and rt.day_sub_phase == "voting":
-        from sqlalchemy import func
-
         cast = await db.scalar(select(func.count(DayVote.id)).where(DayVote.phase_id == phase.id))
         total_q = select(func.count(Player.id)).where(Player.session_id == session_id, Player.status == "alive")
         if rt.day_blocked_player is not None:
@@ -575,8 +535,6 @@ async def state(
         response["my_vote_submitted"] = my_vote is not None
 
     if session.status == "finished" and phase is None:
-        from models.game_event import GameEvent
-
         lp = await db.scalar(
             select(GamePhase)
             .where(GamePhase.session_id == session_id)
@@ -621,22 +579,13 @@ async def reset_to_lobby(
     Only the host can do this. Clears game phases, events, night actions, day votes,
     resets all players to alive, and sets session.status = 'waiting'.
     """
-    session = await db.get(Session, session_id)
-    if session is None:
-        raise GameError(404, "session_not_found", "Сессия не найдена")
+    session = await get_session_or_404(db, session_id)
     if session.status != "finished":
         raise GameError(400, "wrong_status", "Сессия не завершена")
 
-    player = await db.scalar(
-        select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
-    )
-    if player is None:
-        raise GameError(404, "player_not_found", "Игрок не найден в этой сессии")
+    player = await get_player_or_404(db, session_id, current_user.id)
     if player.join_order != 1:
         raise GameError(403, "not_host", "Только хост может вернуть в лобби")
-
-    from sqlalchemy import delete as sa_delete
-    from models.game_event import GameEvent
 
     # Delete game data
     phases = (await db.scalars(select(GamePhase.id).where(GamePhase.session_id == session_id))).all()
@@ -663,10 +612,8 @@ async def reset_to_lobby(
     await db.commit()
 
     # Clear runtime state
-    from services.runtime_state import runtime_state as rs
-    from services.timer_service import timer_service as ts
-    await ts.cancel_all(session_id)
-    rs.clear(session_id)
+    await timer_service.cancel_all(session_id)
+    runtime_state.clear(session_id)
 
     # Notify all players
     await ws_manager.send_to_session(
