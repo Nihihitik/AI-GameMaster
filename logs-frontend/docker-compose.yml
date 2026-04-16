@@ -1,0 +1,27 @@
+name: gamemaster-logs-frontend
+
+services:
+  logs-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gamemaster-logs-frontend
+    restart: unless-stopped
+    environment:
+      # Polling watcher для hot reload изнутри контейнера с bind-mount
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      NODE_ENV: development
+    # Хост-порт 3100, чтобы не конфликтовать с основным фронтом на 3000
+    ports:
+      - "3100:3000"
+    # Bind-mount для hot reload; анонимные volumes на node_modules и .next,
+    # чтобы установленные/собранные внутри образа артефакты не затирались хостовыми
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    stdin_open: true
+    tty: true
