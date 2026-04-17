@@ -15,8 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_db
 from core.config import settings
+from core.database import Base
 from core.exceptions import GameError
 from core.logging import log_event
+import models  # noqa: F401  # регистрирует все ORM-модели в Base.metadata
 from models.player import Player
 from models.session import Session
 from models.user import User
@@ -145,3 +147,48 @@ async def info() -> dict:
         "enabled": settings.OBSERVABILITY_ENABLED,
         "app_env": settings.APP_ENV,
     }
+
+
+@router.get("/schema")
+async def schema() -> dict:
+    """Интроспекция SQLAlchemy metadata для ERD-viewer'а.
+
+    Возвращает таблицы с колонками (имя, тип, PK/FK, nullable) и список FK-связей.
+    Источник — Base.metadata, populated при импорте моделей.
+    """
+    _ensure_enabled()
+
+    tables: list[dict] = []
+    relationships: list[dict] = []
+
+    for table_name in sorted(Base.metadata.tables.keys()):
+        table = Base.metadata.tables[table_name]
+        columns: list[dict] = []
+        for col in table.columns:
+            references = None
+            is_fk = False
+            for fk in col.foreign_keys:
+                is_fk = True
+                references = {
+                    "table": fk.column.table.name,
+                    "column": fk.column.name,
+                }
+                relationships.append(
+                    {
+                        "from": {"table": table_name, "column": col.name},
+                        "to": {"table": fk.column.table.name, "column": fk.column.name},
+                    }
+                )
+            columns.append(
+                {
+                    "name": col.name,
+                    "type": str(col.type),
+                    "nullable": bool(col.nullable),
+                    "is_pk": bool(col.primary_key),
+                    "is_fk": is_fk,
+                    "references": references,
+                }
+            )
+        tables.append({"name": table_name, "columns": columns})
+
+    return {"tables": tables, "relationships": relationships}

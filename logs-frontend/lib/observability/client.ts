@@ -1,3 +1,4 @@
+import type { SchemaResponse } from "@/lib/schema/types";
 import type { SessionsListResponse } from "./types";
 
 const BACKEND_URL = process.env.BACKEND_API_URL ?? "http://gamemaster-backend:8000";
@@ -38,4 +39,8 @@ export async function closeSession(sessionId: string): Promise<{ id: string; sta
   return request(`/api/observability/sessions/${sessionId}/close`, {
     method: "POST",
   });
+}
+
+export async function fetchSchema(signal?: AbortSignal): Promise<SchemaResponse> {
+  return request<SchemaResponse>("/api/observability/schema", { signal });
 }

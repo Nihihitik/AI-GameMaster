@@ -14,23 +14,19 @@ interface PersistedFilter {
   timeWindowMs: number | null;
 }
 
-// In-memory mirror — чтобы при смене source быстро отдать ранее выбранные фильтры
-// без лишнего обращения к sessionStorage.
-const cache = new Map<LogSource, LogFilter>();
-
 function isLogLevel(value: unknown): value is LogLevel {
   return value === "debug" || value === "info" || value === "warn" || value === "error";
 }
 
+// sessionStorage читаем напрямую без in-memory кэша: доступ ~μs, payload маленький,
+// а Map-кэш создавал ненужное глобальное состояние без чистки между сессиями.
 export function loadFilter(source: LogSource): LogFilter | null {
-  const cached = cache.get(source);
-  if (cached) return cached;
   if (typeof window === "undefined") return null;
   try {
     const raw = window.sessionStorage.getItem(`${STORAGE_PREFIX}:${source}`);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PersistedFilter>;
-    const filter: LogFilter = {
+    return {
       levels: new Set(Array.isArray(parsed.levels) ? parsed.levels.filter(isLogLevel) : ["debug", "info", "warn", "error"]),
       domains: new Set(Array.isArray(parsed.domains) ? parsed.domains.map(String) : []),
       events: new Set(Array.isArray(parsed.events) ? parsed.events.map(String) : []),
@@ -43,15 +39,12 @@ export function loadFilter(source: LogSource): LogFilter | null {
           ? parsed.timeWindowMs
           : null,
     };
-    cache.set(source, filter);
-    return filter;
   } catch {
     return null;
   }
 }
 
 export function saveFilter(source: LogSource, filter: LogFilter): void {
-  cache.set(source, filter);
   if (typeof window === "undefined") return;
   try {
     const payload: PersistedFilter = {

@@ -114,6 +114,13 @@ export function useLogStream(source: LogSource): UseLogStreamResult {
   const [frozen, setFrozen] = useState<LogEntry[] | null>(null);
 
   const rateRef = useRef<RateState>({ timestamps: [] });
+  const entriesRef = useRef<LogEntry[]>([]);
+
+  // Синхронизируем ref в effect — read в render запрещён React Compiler'ом,
+  // но write в effect и read в event-callback'е допустим.
+  useEffect(() => {
+    entriesRef.current = entries;
+  }, [entries]);
 
   const setFilter = useCallback<UseLogStreamResult["setFilter"]>(
     (next) => {
@@ -212,18 +219,12 @@ export function useLogStream(source: LogSource): UseLogStreamResult {
   }, [source]);
 
   const togglePause = useCallback(() => {
+    // Снимок берём через entriesRef — он синхронизирован с текущим entries через
+    // отдельный effect, и читается тут внутри event-callback'а (безопасно).
+    // setState-внутри-setState — антипаттерн, поэтому не используем его.
     setPaused((prev) => {
       const next = !prev;
-      // Снимок берём через функциональный setState, чтобы захватить **последний**
-      // entries (между кликом и обработкой может прилететь свежий батч).
-      if (next) {
-        setEntries((latest) => {
-          setFrozen(latest);
-          return latest;
-        });
-      } else {
-        setFrozen(null);
-      }
+      setFrozen(next ? entriesRef.current : null);
       return next;
     });
   }, []);

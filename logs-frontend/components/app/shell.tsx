@@ -7,17 +7,20 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/s
 import { AppSidebar } from "@/components/app/app-sidebar";
 import { LogViewer } from "@/components/logs/log-viewer";
 import { DashboardView } from "@/components/dashboard/dashboard-view";
+import { DatabaseView } from "@/components/database/database-view";
 import type { LogSource } from "@/lib/logs/types";
 
-type View = "dashboard" | "logs";
+type View = "dashboard" | "database" | "logs";
 
 export function Shell() {
   const params = useSearchParams();
   const viewParam = params.get("view");
-  const view: View = viewParam === "dashboard" ? "dashboard" : "logs";
+  const view: View =
+    viewParam === "dashboard" ? "dashboard" : viewParam === "database" ? "database" : "logs";
   const source: LogSource = params.get("source") === "frontend" ? "frontend" : "backend";
 
-  const breadcrumb = view === "dashboard" ? "/dashboard" : `/logs/${source}`;
+  const breadcrumb =
+    view === "dashboard" ? "/dashboard" : view === "database" ? "/database" : `/logs/${source}`;
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -31,6 +34,8 @@ export function Shell() {
           <div className="min-h-0 flex-1">
             {view === "dashboard" ? (
               <DashboardView />
+            ) : view === "database" ? (
+              <DatabaseView />
             ) : (
               <LogViewer key={source} source={source} />
             )}

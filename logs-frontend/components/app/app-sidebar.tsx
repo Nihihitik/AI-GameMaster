@@ -3,7 +3,7 @@
 import * as React from "react";
 import { usePathname, useSearchParams, useRouter } from "next/navigation";
 import { motion } from "motion/react";
-import { Server, Globe, Activity, LayoutDashboard } from "lucide-react";
+import { Server, Globe, Activity, LayoutDashboard, Database } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 import type { LogSource } from "@/lib/logs/types";
 import { usePrefersReducedMotion } from "@/hooks/use-prefers-reduced-motion";
 
-type View = "dashboard" | "logs";
+type View = "dashboard" | "database" | "logs";
 
 interface SidebarProps {
   view: View;
@@ -50,6 +50,13 @@ export function AppSidebar({ view, source }: SidebarProps) {
   const onSelectDashboard = React.useCallback(() => {
     const next = new URLSearchParams(params.toString());
     next.set("view", "dashboard");
+    next.delete("source");
+    navigate(next);
+  }, [params, navigate]);
+
+  const onSelectDatabase = React.useCallback(() => {
+    const next = new URLSearchParams(params.toString());
+    next.set("view", "database");
     next.delete("source");
     navigate(next);
   }, [params, navigate]);
@@ -88,6 +95,19 @@ export function AppSidebar({ view, source }: SidebarProps) {
                   )}
                   <LayoutDashboard className={cn("relative h-4 w-4")} />
                   <span className="relative">Dashboard</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton isActive={view === "database"} onClick={onSelectDatabase} className="relative">
+                  {view === "database" && !reduceMotion && (
+                    <motion.span
+                      layoutId="sidebar-active-indicator"
+                      className="absolute inset-0 rounded-md bg-sidebar-accent"
+                      transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                    />
+                  )}
+                  <Database className={cn("relative h-4 w-4")} />
+                  <span className="relative">База данных</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
