@@ -1,5 +1,6 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '../stores/authStore';
+import { getAuthStorageMode, getRefreshToken } from '../utils/tokenStorage';
 import { API_BASE_URL } from '../utils/constants';
 import { logger, nextClientRequestId } from '../services/logger';
 
@@ -34,13 +35,13 @@ export async function refreshAccessToken(): Promise<string> {
   isRefreshing = true;
   logger.warn('auth.refresh_retry', 'Refreshing access token after authorization failure');
   refreshPromise = (async () => {
-    const refreshToken = localStorage.getItem('refresh_token');
+    const refreshToken = getRefreshToken();
     if (!refreshToken) throw new Error('No refresh token');
     const { data } = await axios.post(
       `${API_BASE_URL}/api/auth/refresh`,
       { refresh_token: refreshToken },
     );
-    useAuthStore.getState().setTokens(data.access_token, data.refresh_token);
+    useAuthStore.getState().setTokens(data.access_token, data.refresh_token, getAuthStorageMode());
     return data.access_token as string;
   })();
 
@@ -79,7 +80,7 @@ httpClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
-    const skipUrls = ['/auth/login', '/auth/register', '/auth/refresh'];
+    const skipUrls = ['/auth/login', '/auth/register', '/auth/refresh', '/dev/test-lobbies/activate'];
 
     if (
       error.response?.status === 401 &&

@@ -24,6 +24,7 @@ from schemas.session import (
     SessionDetailResponse,
     SessionResponse,
 )
+from services.dev_test_lobby_service import build_session_detail_response
 from services.session_service import generate_unique_code, validate_role_config
 from services.ws_manager import ws_manager
 
@@ -124,27 +125,7 @@ async def get_session_by_code(
     )
     if session is None:
         raise GameError(404, "session_not_found", "Сессия не найдена")
-
-    players = [
-        PlayerInList(
-            id=str(p.id),
-            name=p.name,
-            join_order=p.join_order,
-            is_host=(p.user_id == session.host_user_id),
-            is_me=(p.user_id == current_user.id),
-        )
-        for p in sorted(session.players, key=lambda x: x.join_order)
-    ]
-    return SessionDetailResponse(
-        id=str(session.id),
-        code=session.code,
-        host_user_id=str(session.host_user_id),
-        player_count=session.player_count,
-        status=session.status,
-        settings=session.settings,
-        players=players,
-        created_at=session.created_at.isoformat() if session.created_at else "",
-    )
+    return await build_session_detail_response(db, session, current_user.id)
 
 
 @router.post("/{code}/join", response_model=JoinResponse)

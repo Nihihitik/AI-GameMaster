@@ -10,6 +10,7 @@ import {
   VoteInfo,
   GameResult,
   RoleConfig,
+  DevLobbyInfo,
 } from './game';
 
 // ---- Auth ----
@@ -85,6 +86,7 @@ export interface PlayerInList {
 
 export interface SessionDetailResponse extends Session {
   players: PlayerInList[];
+  dev_lobby?: DevLobbyInfo | null;
 }
 
 /** alias — некоторые файлы импортируют это имя */
@@ -114,6 +116,18 @@ export interface UpdateSettingsRequest {
 
 export interface UpdateSettingsResponse {
   settings: SessionSettings;
+}
+
+export interface ActivateDevPlayerRequest {
+  code: string;
+  player_slug: string;
+  bootstrap_key: string;
+}
+
+export interface ActivateDevPlayerResponse {
+  access_token: string;
+  refresh_token: string;
+  user: UserProfile;
 }
 
 export interface StartSessionResponse {

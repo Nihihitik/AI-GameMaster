@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, field_validator
 
 from schemas.validators import strip_name_value
+from schemas.dev import DevLobbyInfo
 
 
 class RoleConfig(BaseModel):
@@ -60,6 +61,7 @@ class SessionDetailResponse(BaseModel):
     settings: dict
     players: list[PlayerInList]
     created_at: str
+    dev_lobby: DevLobbyInfo | None = None
 
 
 class JoinRequest(BaseModel):

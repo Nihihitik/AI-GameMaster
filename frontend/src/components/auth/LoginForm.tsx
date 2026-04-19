@@ -32,7 +32,7 @@ export default function LoginForm({ onToggle }: LoginFormProps) {
 
     try {
       const { data } = await authApi.login({ email: email.trim(), password });
-      setTokens(data.access_token, data.refresh_token);
+      setTokens(data.access_token, data.refresh_token, 'local');
       setUser({
         user_id: data.user_id,
         email: data.email,

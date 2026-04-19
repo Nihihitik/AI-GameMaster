@@ -16,9 +16,15 @@
   gap: 8px;
 }
 
+.game-dev-pill-anchor {
+  position: fixed;
+  top: 6px;
+  right: 6px;
+  z-index: 80;
+}
+
 .game-header-right {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-

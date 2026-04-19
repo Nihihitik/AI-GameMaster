@@ -13,6 +13,7 @@ import DayVotingScreen from '../components/game/DayVotingScreen';
 import FinaleScreen from '../components/game/FinaleScreen';
 import PauseButton from '../components/game/PauseButton';
 import RulesModal, { RulesButton } from '../components/game/RulesModal';
+import DevPlayerQuickPill from '../components/dev/DevPlayerQuickPill';
 import Button from '../components/ui/Button';
 import Loader from '../components/ui/Loader';
 import { useCountdown } from '../hooks/useCountdown';
@@ -77,6 +78,8 @@ export default function GamePage() {
 
   const timerPaused = useSessionStore((s) => s.timerPaused);
   const roleRevealTimer = useSessionStore((s) => s.settings.role_reveal_timer_seconds);
+  const session = useSessionStore((s) => s.session);
+  const isHost = useSessionStore((s) => s.isHost);
 
   const [showRules, setShowRules] = useState(false);
   const [flipped, setFlipped] = useState(false);
@@ -202,6 +205,13 @@ export default function GamePage() {
   const roleImage = roleInfo?.image ?? CARD_BACK_IMAGE;
   const roleDesc = roleInfo?.description ?? 'Роль без описания способностей.';
   const nightAction = myRole.abilities?.night_action;
+  const devPlayerLinks = session?.dev_lobby?.player_links ?? [];
+
+  const handleOpenDevPlayer = (url: string, isHostSlot: boolean) => {
+    if (isHostSlot) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   const renderGameScreen = (content: React.ReactNode) => (
     <div className="game-screen-wrapper">
       <div className="game-screen-header">
@@ -319,6 +329,14 @@ export default function GamePage() {
 
   return (
     <>
+      {isHost && session?.dev_lobby?.is_test_lobby && devPlayerLinks.length > 0 && (
+        <div className="game-dev-pill-anchor">
+          <DevPlayerQuickPill
+            playerLinks={devPlayerLinks}
+            onOpenPlayer={handleOpenDevPlayer}
+          />
+        </div>
+      )}
       {renderScreen()}
       <RulesModal isOpen={showRules} onClose={() => setShowRules(false)} />
     </>

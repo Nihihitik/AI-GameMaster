@@ -85,6 +85,19 @@ export interface SessionSettings {
   voting_timer_seconds: number;
   night_action_timer_seconds: number;
   role_config: RoleConfig;
+  dev_test_lobby?: boolean;
+}
+
+export interface DevLobbyPlayerLink {
+  slot_number: number;
+  player_slug: string;
+  player_name: string;
+  url: string;
+}
+
+export interface DevLobbyInfo {
+  is_test_lobby: boolean;
+  player_links?: DevLobbyPlayerLink[] | null;
 }
 
 export interface Session {
@@ -95,6 +108,7 @@ export interface Session {
   status: 'waiting' | 'active' | 'finished';
   settings: SessionSettings;
   created_at: string;
+  dev_lobby?: DevLobbyInfo | null;
 }
 
 export interface LobbyPlayer {

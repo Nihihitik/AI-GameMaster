@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
 from models.payment import Payment
+from models.dev_test_lobby_link import DevTestLobbyLink
 from models.player import Player
 from models.refresh_token import RefreshToken
 from models.session import Session
@@ -64,8 +65,8 @@ async def delete_user_account(db: AsyncSession, user_id: uuid.UUID) -> None:
         await db.execute(delete(Payment).where(Payment.subscription_id.in_(sub_ids)))
     await db.execute(delete(Subscription).where(Subscription.user_id == user_id))
     await db.execute(delete(RefreshToken).where(RefreshToken.user_id == user_id))
+    await db.execute(delete(DevTestLobbyLink).where(DevTestLobbyLink.user_id == user_id))
     await db.execute(delete(Session).where(Session.host_user_id == user_id))
     await db.execute(delete(Player).where(Player.user_id == user_id))
     await db.execute(delete(User).where(User.id == user_id))
     await db.commit()
-

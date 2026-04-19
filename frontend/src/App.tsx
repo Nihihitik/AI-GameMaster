@@ -6,9 +6,11 @@ import LobbyPage from './pages/LobbyPage';
 import StorySelectionPage from './pages/StorySelectionPage';
 import GamePage from './pages/GamePage';
 import ProfilePage from './pages/ProfilePage';
+import DevPlayerBootstrapPage from './pages/DevPlayerBootstrapPage';
 import Loader from './components/ui/Loader';
 import AppErrorBoundary from './components/app/AppErrorBoundary';
 import { useAuthStore } from './stores/authStore';
+import { prepareAuthStorageFromLocation } from './utils/tokenStorage';
 import { logger } from './services/logger';
 import './App.scss';
 
@@ -28,6 +30,7 @@ const router = createBrowserRouter([
   { path: '/auth', element: <AuthPage /> },
   { path: '/', element: <ProtectedRoute><HomePage /></ProtectedRoute> },
   { path: '/profile', element: <ProtectedRoute><ProfilePage /></ProtectedRoute> },
+  { path: '/sessions/:code/:playerSlug', element: <DevPlayerBootstrapPage /> },
   { path: '/sessions/:code', element: <ProtectedRoute><LobbyPage /></ProtectedRoute> },
   { path: '/sessions/:code/stories', element: <ProtectedRoute><StorySelectionPage /></ProtectedRoute> },
   { path: '/game/:sessionId', element: <ProtectedRoute><GamePage /></ProtectedRoute> },
@@ -39,6 +42,9 @@ function AppBootstrap() {
   const isInitializing = useAuthStore((s) => s.isInitializing);
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      prepareAuthStorageFromLocation(window.location.pathname, window.location.search);
+    }
     initialize().catch((error) => {
       logger.error('app.bootstrap_failed', 'App bootstrap initialization failed', {
         reason: error instanceof Error ? error.message : String(error),

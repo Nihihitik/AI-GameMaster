@@ -6,8 +6,10 @@ import Slider from '../components/ui/Slider';
 import Stepper from '../components/ui/Stepper';
 import Toggle from '../components/ui/Toggle';
 import Loader from '../components/ui/Loader';
+import DevPlayerQuickPill from '../components/dev/DevPlayerQuickPill';
 import { useSessionStore, MAX_PLAYERS, MIN_PLAYERS, getSpecialRolesCount, getCiviliansCount } from '../stores/sessionStore';
 import { useGameStore } from '../stores/gameStore';
+import { devApi } from '../api/devApi';
 import { gameApi } from '../api/gameApi';
 import { sessionApi } from '../api/sessionApi';
 import { wsClient } from '../api/wsClient';
@@ -15,6 +17,8 @@ import { getApiErrorMessage } from '../utils/getApiErrorMessage';
 import { logger } from '../services/logger';
 import { usePageViewLogger } from '../hooks/usePageViewLogger';
 import './LobbyPage.scss';
+
+const DEV_TEST_LOBBY_MAX_PLAYERS = 20;
 
 export default function LobbyPage() {
   const { code } = useParams<{ code: string }>();
@@ -26,6 +30,7 @@ export default function LobbyPage() {
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const [expandingDevLobby, setExpandingDevLobby] = useState(false);
 
   const session = useSessionStore((s) => s.session);
   const players = useSessionStore((s) => s.players);
@@ -35,6 +40,7 @@ export default function LobbyPage() {
   const setWithStory = useSessionStore((s) => s.setWithStory);
   const myPlayerId = useSessionStore((s) => s.myPlayerId);
   const setSettings = useSessionStore((s) => s.setSettings);
+  const hydrateSessionDetail = useSessionStore((s) => s.hydrateSessionDetail);
 
   // Защита от двойного leave/close API-запроса при перехвате навигации.
   const leavingRef = useRef(false);
@@ -183,6 +189,24 @@ export default function LobbyPage() {
     }
   };
 
+  const handleOpenDevPlayer = (url: string, isHostSlot: boolean) => {
+    if (isHostSlot) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleExpandDevLobby = async () => {
+    if (!session) return;
+    setExpandingDevLobby(true);
+    try {
+      const { data } = await devApi.expandTestLobby(session.id);
+      hydrateSessionDetail(data);
+    } catch (err) {
+      setStartError(getApiErrorMessage(err));
+    } finally {
+      setExpandingDevLobby(false);
+    }
+  };
+
   const updateRoleConfig = async (key: string, value: number) => {
     const newConfig = { ...settings.role_config, [key]: value };
     const newSpecial = getSpecialRolesCount(newConfig);
@@ -220,6 +244,8 @@ export default function LobbyPage() {
 
   const rolesExceedPlayers = specialCount > players.length;
   const canStart = players.length >= MIN_PLAYERS && !rolesExceedPlayers;
+  const devLobby = session?.dev_lobby;
+  const devPlayerLinks = devLobby?.player_links ?? [];
 
   if (loading) {
     return (
@@ -240,6 +266,16 @@ export default function LobbyPage() {
 
   return (
     <div className="lobby-page">
+      {isHost && devLobby?.is_test_lobby && (
+        <div className="lobby-dev-pill-anchor">
+          <DevPlayerQuickPill
+            playerLinks={devPlayerLinks}
+            onOpenPlayer={handleOpenDevPlayer}
+            onAddPlayer={handleExpandDevLobby}
+            addDisabled={expandingDevLobby || session.player_count >= DEV_TEST_LOBBY_MAX_PLAYERS}
+          />
+        </div>
+      )}
       <header className="lobby-header">
         <button className="lobby-header__back" onClick={() => navigate('/')}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -247,15 +283,17 @@ export default function LobbyPage() {
           </svg>
         </button>
         <h1 className="lobby-header__title">Лобби</h1>
-        {isHost && (
-          <button className="lobby-header__settings" onClick={() => setShowSettings(true)}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-          </button>
-        )}
-        {!isHost && <div style={{ width: 40 }} />}
+        <div className="lobby-header__actions">
+          {isHost && (
+            <button className="lobby-header__settings" onClick={() => setShowSettings(true)}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          )}
+          {!isHost && <div style={{ width: 40 }} />}
+        </div>
       </header>
 
       <main className="lobby-main">

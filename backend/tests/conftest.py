@@ -27,7 +27,15 @@ fastapi_security_stub.HTTPAuthorizationCredentials = object
 
 pydantic_stub = types.ModuleType("pydantic")
 pydantic_stub.Field = lambda default=None, **kwargs: default
-pydantic_stub.BaseModel = type("BaseModel", (), {})
+
+
+class _BaseModel:
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+pydantic_stub.BaseModel = _BaseModel
 pydantic_stub.EmailStr = str
 pydantic_stub.field_validator = lambda *a, **kw: lambda f: f
 

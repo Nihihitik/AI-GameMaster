@@ -52,6 +52,20 @@
     color: #ffffff;
     margin: 0;
   }
+
+  &__actions {
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+}
+
+.lobby-dev-pill-anchor {
+  position: fixed;
+  top: 6px;
+  right: 6px;
+  z-index: 80;
 }
 
 .lobby-main {

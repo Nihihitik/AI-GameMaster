@@ -89,6 +89,8 @@ from api.routers.logs import router as logs_router
 from api.routers.observability import router as observability_router
 from api.routers.subscriptions import router as subscriptions_router
 from api.websockets.ws import router as ws_router
+if settings.APP_ENV == "development":
+    from api.routers.dev import router as dev_router
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(sessions_router, prefix="/api/sessions", tags=["sessions"])
@@ -98,6 +100,8 @@ app.include_router(logs_router, prefix="/api/logs", tags=["logs"])
 app.include_router(observability_router, prefix="/api/observability", tags=["observability"])
 app.include_router(subscriptions_router, prefix="/api/subscriptions", tags=["subscriptions"])
 app.include_router(ws_router, prefix="/ws", tags=["ws"])
+if settings.APP_ENV == "development":
+    app.include_router(dev_router, prefix="/api/dev", tags=["dev"])
 
 
 @app.on_event("startup")

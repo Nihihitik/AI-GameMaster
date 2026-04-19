@@ -11,6 +11,7 @@ from models.game_event import GameEvent
 from models.subscription import Subscription
 from models.payment import Payment
 from models.refresh_token import RefreshToken
+from models.dev_test_lobby_link import DevTestLobbyLink
 
 __all__ = [
     "User",
@@ -24,4 +25,5 @@ __all__ = [
     "Subscription",
     "Payment",
     "RefreshToken",
+    "DevTestLobbyLink",
 ]

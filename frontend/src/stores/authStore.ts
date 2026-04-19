@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { UserProfile } from '../types/api';
 import { authApi } from '../api/authApi';
 import { refreshAccessToken } from '../api/httpClient';
+import { AuthStorageMode, getRefreshToken, removeRefreshToken, setRefreshToken } from '../utils/tokenStorage';
 import { logger } from '../services/logger';
 
 interface AuthState {
@@ -10,7 +11,7 @@ interface AuthState {
   isAuthenticated: boolean;
   isInitializing: boolean;
 
-  setTokens: (accessToken: string, refreshToken: string) => void;
+  setTokens: (accessToken: string, refreshToken: string, mode?: AuthStorageMode) => void;
   setUser: (user: UserProfile) => void;
   logout: () => Promise<void>;
   initialize: () => Promise<void>; // Auto-login по refresh-токену при старте приложения
@@ -27,8 +28,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   // не отправил пользователя на /auth раньше времени.
   isInitializing: true,
 
-  setTokens: (accessToken, refreshToken) => {
-    localStorage.setItem('refresh_token', refreshToken);
+  setTokens: (accessToken, refreshToken, mode = 'local') => {
+    setRefreshToken(refreshToken, mode);
     set({ accessToken, isAuthenticated: true });
   },
 
@@ -39,7 +40,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     logoutInProgress = true;
     try {
       // Попытаться честно инвалидировать refresh-токен на бэке (не критично, ошибки глушим).
-      const refreshToken = localStorage.getItem('refresh_token');
+      const refreshToken = getRefreshToken();
       if (refreshToken) {
         try {
           await authApi.logout({ refresh_token: refreshToken });
@@ -47,7 +48,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           // ignore — локальный логаут всё равно должен сработать
         }
       }
-      localStorage.removeItem('refresh_token');
+      removeRefreshToken();
       set({ accessToken: null, user: null, isAuthenticated: false });
       logger.info('auth.logout_success', 'User logged out on frontend');
     } finally {
@@ -56,7 +57,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   initialize: async () => {
-    const refreshToken = localStorage.getItem('refresh_token');
+    const refreshToken = getRefreshToken();
     if (!refreshToken) {
       set({ isInitializing: false });
       return;
@@ -70,7 +71,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       logger.info('auth.initialize_success', 'Auth session restored from refresh token');
     } catch {
       // Невалидный/истёкший refresh — чистим всё и отправляем на /auth.
-      localStorage.removeItem('refresh_token');
+      removeRefreshToken();
       set({ accessToken: null, user: null, isAuthenticated: false });
       logger.warn('auth.initialize_failed', 'Failed to restore auth session from refresh token');
     } finally {

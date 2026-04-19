@@ -10,9 +10,11 @@ import { useAuthStore } from '../stores/authStore';
 import { RoleConfig } from '../types/game';
 import { subscriptionsApi } from '../api/subscriptionsApi';
 import { authApi } from '../api/authApi';
+import { devApi } from '../api/devApi';
 import { createDefaultSessionSettings } from '../utils/sessionDefaults';
 import { getApiErrorMessage } from '../utils/getApiErrorMessage';
 import { parseApiError } from '../utils/parseApiError';
+import { APP_ENV } from '../utils/constants';
 import { logger } from '../services/logger';
 import { usePageViewLogger } from '../hooks/usePageViewLogger';
 import './HomePage.scss';
@@ -28,6 +30,7 @@ export default function HomePage() {
   const [joinError, setJoinError] = useState('');
   const [joinStep, setJoinStep] = useState<'code' | 'name'>('code');
   const [creating, setCreating] = useState(false);
+  const [creatingTestLobby, setCreatingTestLobby] = useState(false);
   const [joining, setJoining] = useState(false);
   const [createError, setCreateError] = useState('');
 
@@ -86,6 +89,23 @@ export default function HomePage() {
       setCreateError(getApiErrorMessage(err));
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleCreateTestLobby = async () => {
+    setCreateError('');
+    setCreatingTestLobby(true);
+    try {
+      const { data } = await devApi.createTestLobby();
+      useSessionStore.getState().hydrateSessionDetail(data);
+      navigate(`/sessions/${data.code}`);
+    } catch (err) {
+      logger.warn('dev.test_lobby_create_failed', 'Failed to create dev test lobby', {
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      setCreateError(getApiErrorMessage(err));
+    } finally {
+      setCreatingTestLobby(false);
     }
   };
 
@@ -196,6 +216,11 @@ export default function HomePage() {
 
         <div className="home-actions">
           <Button onClick={handleOpenCreate}>Создать сессию</Button>
+          {APP_ENV === 'development' && (
+            <Button onClick={handleCreateTestLobby} disabled={creatingTestLobby} loading={creatingTestLobby}>
+              Создать тестовое лобби
+            </Button>
+          )}
           <div className="home-actions__spacer" />
           <button className="home-join-btn" onClick={() => setShowJoinModal(true)}>
             <span className="home-join-btn__glow" />
@@ -204,6 +229,7 @@ export default function HomePage() {
             </span>
           </button>
         </div>
+        {createError && <div className="auth-form__error">{createError}</div>}
       </main>
 
       <Modal

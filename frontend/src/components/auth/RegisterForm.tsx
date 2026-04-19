@@ -116,7 +116,7 @@ export default function RegisterForm({ onToggle }: RegisterFormProps) {
         password,
         nickname: trimmedNickname,
       });
-      setTokens(data.access_token, data.refresh_token);
+      setTokens(data.access_token, data.refresh_token, 'local');
       setUser({
         user_id: data.user_id,
         email: data.email,

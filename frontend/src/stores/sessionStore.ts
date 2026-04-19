@@ -3,6 +3,7 @@ import { Session, SessionSettings, LobbyPlayer, RoleConfig } from '../types/game
 import type {
   CreateSessionRequest,
   PlayerInList,
+  SessionDetailResponse,
   UpdateSettingsRequest,
 } from '../types/api';
 import { sessionApi } from '../api/sessionApi';
@@ -40,6 +41,7 @@ interface SessionState {
   joinSession: (code: string, name: string) => Promise<void>;
   loadByCode: (code: string) => Promise<void>;
   setSettings: (settings: UpdateSettingsRequest) => Promise<void>;
+  hydrateSessionDetail: (detail: SessionDetailResponse) => void;
 
   // WebSocket hooks
   upsertPlayer: (player: PlayerInList) => void;
@@ -72,6 +74,19 @@ function playersFromList(list: PlayerInList[]): LobbyPlayer[] {
   }));
 }
 
+function stateFromSessionDetail(detailData: SessionDetailResponse) {
+  const currentUser = useAuthStore.getState().user;
+  const players = playersFromList(detailData.players);
+  const myPlayer = detailData.players.find((p) => p.is_me);
+  return {
+    session: detailData,
+    players,
+    settings: detailData.settings,
+    isHost: currentUser ? detailData.host_user_id === currentUser.user_id : false,
+    myPlayerId: myPlayer?.id ?? null,
+  };
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   session: null,
   players: [],
@@ -89,16 +104,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Hydrate full detail + players via getByCode (players содержат is_me для определения своего слота).
     const detail = await sessionApi.getByCode(session.code);
     const detailData = detail.data;
-    const currentUser = useAuthStore.getState().user;
-    const players = playersFromList(detailData.players);
-    const myPlayer = detailData.players.find((p) => p.is_me);
-    set({
-      session: detailData,
-      players,
-      settings: detailData.settings,
-      isHost: currentUser ? detailData.host_user_id === currentUser.user_id : true,
-      myPlayerId: myPlayer?.id ?? null,
-    });
+    const nextState = stateFromSessionDetail(detailData);
+    set({ ...nextState, isHost: true });
     logger.info('session.create_success', 'Session created successfully', {
       sessionId: detailData.id,
       playerCount: detailData.player_count,
@@ -111,40 +118,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const joinData = joinResponse.data;
     const detail = await sessionApi.getByCode(code);
     const detailData = detail.data;
-    const currentUser = useAuthStore.getState().user;
-    const players = playersFromList(detailData.players);
-    // myPlayerId: сначала пробуем is_me из detailData, потом fallback на player_id из POST /join.
-    const myPlayer = detailData.players.find((p) => p.is_me);
-    set({
-      session: detailData,
-      players,
-      settings: detailData.settings,
-      isHost: currentUser ? detailData.host_user_id === currentUser.user_id : false,
-      myPlayerId: myPlayer?.id ?? joinData.player_id,
-    });
+    const nextState = stateFromSessionDetail(detailData);
+    set({ ...nextState, myPlayerId: nextState.myPlayerId ?? joinData.player_id });
     logger.info('session.join_success', 'Joined session successfully', {
       sessionId: detailData.id,
-      playerId: myPlayer?.id ?? joinData.player_id,
+      playerId: nextState.myPlayerId ?? joinData.player_id,
     }, { sessionId: detailData.id });
   },
 
   loadByCode: async (code) => {
     const detail = await sessionApi.getByCode(code);
     const detailData = detail.data;
-    const currentUser = useAuthStore.getState().user;
-    const players = playersFromList(detailData.players);
-    // После F5: находим себя через is_me (работает и для хоста, и для обычного игрока).
-    const myPlayer = detailData.players.find((p) => p.is_me);
-    set({
-      session: detailData,
-      players,
-      settings: detailData.settings,
-      isHost: currentUser ? detailData.host_user_id === currentUser.user_id : false,
-      myPlayerId: myPlayer?.id ?? null,
-    });
+    set(stateFromSessionDetail(detailData));
     logger.info('session.load_success', 'Session state loaded', {
       sessionId: detailData.id,
     }, { sessionId: detailData.id });
+  },
+
+  hydrateSessionDetail: (detail) => {
+    set(stateFromSessionDetail(detail));
   },
 
   setSettings: async (newSettings) => {
