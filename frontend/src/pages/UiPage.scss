@@ -1,0 +1,184 @@
+@import '../components/showcase/tokens.scss';
+
+.ui-page {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--ui-bg);
+  color: var(--ui-foreground);
+}
+
+/* Stage width modifiers — растягиваем stage и его детей на всю ширину ячейки */
+.ui-stage--wide {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  padding: var(--ui-sp-5);
+
+  > * {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+}
+
+.ui-stage--night {
+  padding: 0;
+  min-height: 300px;
+  height: 300px;
+  overflow: hidden;
+}
+
+.ui-stage--ambient {
+  padding: var(--ui-sp-4);
+}
+
+.ui-stage--matrix {
+  padding: 0;
+  min-height: 300px;
+  overflow: hidden;
+}
+
+/* Night-sky frame override (position fixed → absolute) */
+.ui-night-frame {
+  position: relative;
+  width: 100%;
+  height: 300px;
+  overflow: hidden;
+  background: #000;
+  border-radius: 8px;
+
+  /* Сам NightWaitingScreen — min-height 100vh, нужно уменьшить до frame */
+  .night-waiting {
+    position: absolute;
+    inset: 0;
+    min-height: 100%;
+  }
+}
+
+/* Matrix frame — клетчато-абсолютный override, чтобы fixed-фон не растягивался */
+.ui-matrix-frame {
+  position: relative;
+  width: 100%;
+  height: 300px;
+  overflow: hidden;
+  background: #000;
+  border-radius: 8px;
+
+  .jp-matrix-container {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+  }
+}
+
+/* Ambient-frame — для показа AmbientBackground в ограниченной области */
+.ui-ambient-frame {
+  position: relative;
+  width: 100%;
+  height: 160px;
+  overflow: hidden;
+  background: #000;
+  border-radius: 8px;
+
+  .ambient-bg,
+  .ambient-bg__blob {
+    position: absolute;
+  }
+}
+
+/* Typewriter demo */
+.ui-demo-typewriter {
+  position: relative;
+  width: 100%;
+  padding: var(--ui-sp-8) var(--ui-sp-6) var(--ui-sp-6);
+  background: #000;
+  border-radius: 8px;
+  color: #fff;
+  font-family: 'Inter', sans-serif;
+
+  &__text {
+    margin: var(--ui-sp-4) 0 0;
+    font-size: 16px;
+    line-height: 1.8;
+    text-align: center;
+
+    .narrator-char {
+      color: rgba(255, 255, 255, 0.15);
+      transition: color 0.4s ease;
+
+      &--visible {
+        color: #c81e1e;
+      }
+    }
+  }
+}
+
+/* Stagger list demo */
+.ui-demo-stagger {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--ui-sp-4);
+  background: #000;
+  border-radius: 8px;
+}
+
+/* Role card demo — карта 260×380 уменьшена scale'ом чтобы поместиться в stage */
+.ui-demo-role-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 260px;
+  padding: var(--ui-sp-4);
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+
+  .role-card {
+    cursor: pointer;
+    transform: scale(0.55);
+    transform-origin: center;
+  }
+}
+
+/* Game header demo wrapper — чтобы sticky хедер не прилипал к viewport */
+.ui-demo-game-header {
+  width: 100%;
+  position: relative;
+  background: #000;
+  border-radius: 8px;
+
+  .game-screen-header {
+    position: relative;
+    top: auto;
+  }
+}
+
+/* Modal demo */
+.ui-demo-modal {
+  display: flex;
+  gap: var(--ui-sp-3);
+}
+
+/* Rules demo */
+.ui-demo-rules {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Settings demo wrapper */
+.ui-demo-settings {
+  width: 100%;
+  padding: var(--ui-sp-4);
+  background: #000;
+  border-radius: 8px;
+  color: #fff;
+}

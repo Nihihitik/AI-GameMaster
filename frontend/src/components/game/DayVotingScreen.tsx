@@ -1,9 +1,19 @@
 import React, { useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
-import PauseButton from './PauseButton';
 import { useCountdown } from '../../hooks/useCountdown';
+import AmbientBackground from '../ui/AmbientBackground';
+import Timer from '../ui/Timer';
+import ProgressBar from '../ui/ProgressBar';
+import SelectableCard from '../ui/SelectableCard';
+import GameScreenHeader from './GameScreenHeader';
 import './DayVotingScreen.scss';
+
+const CheckIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
 
 export default function DayVotingScreen() {
   const availableTargets = useGameStore((s) => s.availableTargets);
@@ -54,16 +64,11 @@ export default function DayVotingScreen() {
     }
   };
 
-  const formatTime = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return `${m}:${sec.toString().padStart(2, '0')}`;
-  };
-
   if (voteSubmitted) {
+    const progressValue = votes ? (votes.cast / votes.total_expected) * 100 : 0;
     return (
       <div className="day-voting day-voting--submitted">
-        <div className="day-voting__ambient" />
+        <AmbientBackground variant="voting" />
         <div className="day-voting__submitted-content">
           <div className="day-voting__check-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -76,12 +81,7 @@ export default function DayVotingScreen() {
               ? `Проголосовали: ${votes.cast} / ${votes.total_expected}`
               : 'Ожидание других игроков...'}
           </p>
-          <div className="day-voting__vote-progress">
-            <div
-              className="day-voting__vote-progress-bar"
-              style={{ width: votes ? `${(votes.cast / votes.total_expected) * 100}%` : '0%' }}
-            />
-          </div>
+          <ProgressBar value={progressValue} variant="votes" />
         </div>
       </div>
     );
@@ -89,15 +89,12 @@ export default function DayVotingScreen() {
 
   return (
     <div className="day-voting">
-      <div className="day-voting__ambient" />
+      <AmbientBackground variant="voting" />
 
-      <header className="day-voting__header">
-        <PauseButton />
-        <h2 className="day-voting__title">Голосование</h2>
-        <div className={`day-voting__timer ${timeLeft <= 10 ? 'day-voting__timer--danger' : ''}`}>
-          {formatTime(timeLeft)}
-        </div>
-      </header>
+      <GameScreenHeader
+        title="Голосование"
+        timer={<Timer seconds={timeLeft} dangerThreshold={10} />}
+      />
 
       {votes && (
         <div className="day-voting__vote-counter">
@@ -118,23 +115,20 @@ export default function DayVotingScreen() {
       )}
 
       <div className="day-voting__targets">
-        {availableTargets.map((target) => (
-          <button
-            key={target.player_id}
-            className={`day-voting__target ${selectedTarget === target.player_id ? 'day-voting__target--selected' : ''}`}
-            onClick={() => canVote && setSelectedTarget(target.player_id)}
-            disabled={!canVote}
-          >
-            <span className="day-voting__target-name">{target.name}</span>
-            {selectedTarget === target.player_id && (
-              <span className="day-voting__target-check">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              </span>
-            )}
-          </button>
-        ))}
+        {availableTargets.map((target) => {
+          const isSelected = selectedTarget === target.player_id;
+          return (
+            <SelectableCard
+              key={target.player_id}
+              state={isSelected ? 'selected' : 'default'}
+              disabled={!canVote}
+              onClick={() => canVote && setSelectedTarget(target.player_id)}
+              rightSlot={isSelected ? <span className="day-voting__target-check"><CheckIcon /></span> : null}
+            >
+              {target.name}
+            </SelectableCard>
+          );
+        })}
       </div>
 
       <div className="day-voting__actions">

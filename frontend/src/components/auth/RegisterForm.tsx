@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Input from '../ui/Input';
 import Button, { LinkButton } from '../ui/Button';
+import Alert from '../ui/Alert';
 import { authApi } from '../../api/authApi';
 import { useAuthStore } from '../../stores/authStore';
 import { getApiErrorMessage } from '../../utils/getApiErrorMessage';
@@ -175,7 +176,7 @@ export default function RegisterForm({ onToggle }: RegisterFormProps) {
         autoComplete="new-password"
       />
 
-      {serverError && <div className="auth-form__error">{serverError}</div>}
+      {serverError && <Alert variant="error">{serverError}</Alert>}
 
       <div className="auth-form__actions">
         <Button type="submit" disabled={!isFormValid} loading={loading}>

@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom';
+import React, { lazy, Suspense, useEffect } from 'react';
+import { createBrowserRouter, RouterProvider, Navigate, type RouteObject } from 'react-router-dom';
 import AuthPage from './pages/AuthPage';
 import HomePage from './pages/HomePage';
 import LobbyPage from './pages/LobbyPage';
@@ -14,6 +14,14 @@ import { prepareAuthStorageFromLocation } from './utils/tokenStorage';
 import { logger } from './services/logger';
 import './App.scss';
 
+// Dev-only UI showcase page. В production-build lazy-импорт dead-code-elim-ится
+// благодаря NODE_ENV-гварду (Terser). `process.env.NODE_ENV` — единственный
+// паттерн, который CRA/react-scripts надёжно распознаёт для tree-shaking.
+let DevUiPage: React.LazyExoticComponent<React.ComponentType> | null = null;
+if (process.env.NODE_ENV !== 'production') {
+  DevUiPage = lazy(() => import('./pages/UiPage'));
+}
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
@@ -26,6 +34,19 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 // Data router (createBrowserRouter) обязателен для useBlocker в react-router-dom v7.
 // Обычный <BrowserRouter> / <Routes> — legacy, useBlocker в нём бросает invariant.
+const devRoutes: RouteObject[] = DevUiPage
+  ? [
+      {
+        path: '/ui',
+        element: (
+          <Suspense fallback={<div className="app-bootstrap"><Loader size={48} /></div>}>
+            <DevUiPage />
+          </Suspense>
+        ),
+      },
+    ]
+  : [];
+
 const router = createBrowserRouter([
   { path: '/auth', element: <AuthPage /> },
   { path: '/', element: <ProtectedRoute><HomePage /></ProtectedRoute> },
@@ -34,6 +55,7 @@ const router = createBrowserRouter([
   { path: '/sessions/:code', element: <ProtectedRoute><LobbyPage /></ProtectedRoute> },
   { path: '/sessions/:code/stories', element: <ProtectedRoute><StorySelectionPage /></ProtectedRoute> },
   { path: '/game/:sessionId', element: <ProtectedRoute><GamePage /></ProtectedRoute> },
+  ...devRoutes,
   { path: '*', element: <Navigate to="/" replace /> },
 ]);
 

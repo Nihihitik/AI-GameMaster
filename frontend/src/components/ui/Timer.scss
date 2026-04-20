@@ -1,0 +1,25 @@
+.timer {
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
+  font-variant-numeric: tabular-nums;
+  transition: color 0.3s ease;
+  display: inline-block;
+
+  &--default {
+    font-size: 20px;
+  }
+
+  &--compact {
+    font-size: 18px;
+  }
+
+  &--danger {
+    color: #ff4444;
+    animation: timer-blink 1s ease infinite;
+  }
+}
+
+@keyframes timer-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}

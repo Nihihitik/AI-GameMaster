@@ -1,0 +1,102 @@
+.ambient-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+
+  &--night {
+    background: radial-gradient(ellipse at 50% 30%, rgba(200, 30, 30, 0.05), transparent 70%);
+  }
+
+  &--day {
+    background: radial-gradient(ellipse at 50% -10%, rgba(255, 180, 50, 0.08), transparent 50%);
+  }
+
+  &--voting {
+    background: radial-gradient(ellipse at 50% -10%, rgba(200, 30, 30, 0.1), transparent 50%);
+  }
+
+  &--narrator {
+    background: radial-gradient(ellipse at 50% 30%, rgba(200, 30, 30, 0.08), transparent 70%);
+    animation: ambient-narrator-pulse 4s ease infinite;
+  }
+
+  &--finale-city {
+    background: radial-gradient(ellipse at 50% 20%, rgba(34, 197, 94, 0.12), transparent 60%);
+  }
+
+  &--finale-mafia {
+    background: radial-gradient(ellipse at 50% 20%, rgba(200, 30, 30, 0.12), transparent 60%);
+  }
+
+  &--found {
+    background: radial-gradient(ellipse at 50% 30%, rgba(34, 197, 94, 0.15), transparent 60%);
+  }
+
+  &--clean {
+    background: radial-gradient(ellipse at 50% 30%, rgba(100, 100, 100, 0.1), transparent 60%);
+  }
+
+  &__blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(100px);
+    pointer-events: none;
+    z-index: 0;
+
+    &--1 {
+      width: 420px;
+      height: 420px;
+      background: radial-gradient(circle, #c81e1e, transparent 65%);
+      top: -60px;
+      right: -200px;
+      opacity: 0.3;
+      animation: ambient-blob-drift-1 8s ease-in-out infinite;
+    }
+
+    &--2 {
+      width: 380px;
+      height: 380px;
+      background: radial-gradient(circle, #c81e1e, transparent 65%);
+      bottom: -40px;
+      left: -200px;
+      opacity: 0.3;
+      animation: ambient-blob-drift-2 10s ease-in-out infinite;
+    }
+
+    &--3 {
+      width: 320px;
+      height: 320px;
+      background: radial-gradient(circle, #a01818, transparent 65%);
+      top: 45%;
+      right: -180px;
+      opacity: 0.2;
+      animation: ambient-blob-drift-3 12s ease-in-out infinite;
+    }
+  }
+}
+
+@keyframes ambient-narrator-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@keyframes ambient-blob-drift-1 {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(-20px, 30px); }
+  50% { transform: translate(10px, 50px); }
+  75% { transform: translate(-15px, 20px); }
+}
+
+@keyframes ambient-blob-drift-2 {
+  0%, 100% { transform: translate(0, 0); }
+  25% { transform: translate(30px, -20px); }
+  50% { transform: translate(15px, -40px); }
+  75% { transform: translate(25px, -10px); }
+}
+
+@keyframes ambient-blob-drift-3 {
+  0%, 100% { transform: translate(0, 0); }
+  33% { transform: translate(-25px, -20px); }
+  66% { transform: translate(15px, 25px); }
+}

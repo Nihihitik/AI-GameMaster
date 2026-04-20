@@ -2,13 +2,18 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams, useBlocker } from 'react-router-dom';
 import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
-import Slider from '../components/ui/Slider';
-import Stepper from '../components/ui/Stepper';
 import Toggle from '../components/ui/Toggle';
 import Loader from '../components/ui/Loader';
+import Alert from '../components/ui/Alert';
+import WaitingBlock from '../components/ui/WaitingBlock';
+import IconButton from '../components/ui/IconButton';
+import PageHeader from '../components/ui/PageHeader';
+import CodeCard from '../components/session/CodeCard';
+import SessionSettingsForm from '../components/session/SessionSettingsForm';
 import DevPlayerQuickPill from '../components/dev/DevPlayerQuickPill';
-import { useSessionStore, MAX_PLAYERS, MIN_PLAYERS, getSpecialRolesCount, getCiviliansCount } from '../stores/sessionStore';
+import { useSessionStore, MAX_PLAYERS, MIN_PLAYERS, getSpecialRolesCount } from '../stores/sessionStore';
 import { useGameStore } from '../stores/gameStore';
+import { RoleConfig } from '../types/game';
 import { devApi } from '../api/devApi';
 import { gameApi } from '../api/gameApi';
 import { sessionApi } from '../api/sessionApi';
@@ -20,11 +25,17 @@ import './LobbyPage.scss';
 
 const DEV_TEST_LOBBY_MAX_PLAYERS = 20;
 
+const SettingsIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
 export default function LobbyPage() {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
   const [showSettings, setShowSettings] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -89,7 +100,6 @@ export default function LobbyPage() {
   }, [blocker, blocker.state, leaveSessionIfAny]);
 
   const specialCount = getSpecialRolesCount(settings.role_config);
-  const civiliansCount = getCiviliansCount(session?.player_count || players.length, settings.role_config);
   usePageViewLogger('LobbyPage', { code });
 
   // Load session + open WebSocket on mount; tear down on unmount.
@@ -150,15 +160,6 @@ export default function LobbyPage() {
     navigate(`/game/${session.id}`);
   }, [myRole, isHost, session, navigate]);
 
-  const handleCopyCode = () => {
-    if (session?.code) {
-      navigator.clipboard.writeText(session.code).then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      });
-    }
-  };
-
   const handleStartGame = async () => {
     if (!session) return;
     setStarting(true);
@@ -204,7 +205,7 @@ export default function LobbyPage() {
     }
   };
 
-  const updateRoleConfig = async (key: string, value: number) => {
+  const updateRoleConfig = async (key: keyof RoleConfig, value: number) => {
     const newConfig = { ...settings.role_config, [key]: value };
     const newSpecial = getSpecialRolesCount(newConfig);
     if (newSpecial > MAX_PLAYERS) return;
@@ -273,34 +274,23 @@ export default function LobbyPage() {
           />
         </div>
       )}
-      <header className="lobby-header">
-        <button className="lobby-header__back" onClick={() => navigate('/')}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M19 12H5M12 19l-7-7 7-7" />
-          </svg>
-        </button>
-        <h1 className="lobby-header__title">Лобби</h1>
-        <div className="lobby-header__actions">
-          {isHost && (
-            <button className="lobby-header__settings" onClick={() => setShowSettings(true)}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
-            </button>
-          )}
-          {!isHost && <div style={{ width: 40 }} />}
-        </div>
-      </header>
+      <PageHeader
+        title="Лобби"
+        onBack={() => navigate('/')}
+        rightSlot={
+          isHost ? (
+            <IconButton
+              icon={<SettingsIcon />}
+              onClick={() => setShowSettings(true)}
+              ariaLabel="Настройки"
+              size={40}
+            />
+          ) : undefined
+        }
+      />
 
       <main className="lobby-main">
-        <div className="lobby-code-card" onClick={handleCopyCode}>
-          <span className="lobby-code-card__label">Код сессии</span>
-          <span className="lobby-code-card__code">{session.code}</span>
-          <span className="lobby-code-card__copy">
-            {copied ? 'Скопировано!' : 'Нажмите, чтобы скопировать'}
-          </span>
-        </div>
+        <CodeCard code={session.code} />
 
         <div className="lobby-players">
           <div className="lobby-players__header">
@@ -340,9 +330,9 @@ export default function LobbyPage() {
         {isHost && (
           <div className="lobby-start">
             {startError && (
-              <div className="lobby-start__error" onClick={() => setStartError(null)}>
+              <Alert variant="error" onDismiss={() => setStartError(null)}>
                 {startError}
-              </div>
+              </Alert>
             )}
             <Button onClick={handleStartGame} disabled={!canStart || starting}>
               {starting
@@ -357,10 +347,7 @@ export default function LobbyPage() {
           </div>
         )}
         {!isHost && (
-          <div className="lobby-waiting-msg">
-            <Loader size={32} />
-            <p>Ожидание начала игры...</p>
-          </div>
+          <WaitingBlock text="Ожидание начала игры..." loaderSize={32} className="lobby-waiting-msg" />
         )}
       </main>
 
@@ -370,79 +357,19 @@ export default function LobbyPage() {
         title="Настройки сессии"
       >
         <div className="lobby-settings">
-          <div className="lobby-settings__section">
-            <h4 className="lobby-settings__section-title">Таймеры</h4>
-            <Slider
-              label="Обсуждение"
-              value={settings.discussion_timer_seconds}
-              min={30}
-              max={300}
-              step={10}
-              onChange={(v) => handleTimerChange({ discussion_timer_seconds: v })}
-            />
-            <Slider
-              label="Голосование"
-              value={settings.voting_timer_seconds}
-              min={15}
-              max={120}
-              step={5}
-              onChange={(v) => handleTimerChange({ voting_timer_seconds: v })}
-            />
-            <Slider
-              label="Ночные действия"
-              value={settings.night_action_timer_seconds}
-              min={15}
-              max={60}
-              step={5}
-              onChange={(v) => handleTimerChange({ night_action_timer_seconds: v })}
-            />
-            <Slider
-              label="Ознакомление с ролью"
-              value={settings.role_reveal_timer_seconds}
-              min={10}
-              max={30}
-              step={1}
-              onChange={(v) => handleTimerChange({ role_reveal_timer_seconds: v })}
-            />
-          </div>
+          <SessionSettingsForm
+            settings={settings}
+            onChangeTimers={handleTimerChange}
+            onChangeRoleConfig={updateRoleConfig}
+            playerCount={players.length}
+            showRolesWarning
+          />
 
-          <div className="lobby-settings__section">
-            <h4 className="lobby-settings__section-title">Роли</h4>
-            <Stepper label="Мафия" value={settings.role_config.mafia} min={1} max={2}
-              onChange={(v) => updateRoleConfig('mafia', v)} />
-            <Stepper label="Дон Мафии" value={settings.role_config.don} min={0} max={1}
-              onChange={(v) => updateRoleConfig('don', v)} />
-            <Stepper label="Шериф" value={settings.role_config.sheriff} min={0} max={1}
-              onChange={(v) => updateRoleConfig('sheriff', v)} />
-            <Stepper label="Доктор" value={settings.role_config.doctor} min={0} max={1}
-              onChange={(v) => updateRoleConfig('doctor', v)} />
-            <Stepper label="Любовница" value={settings.role_config.lover} min={0} max={1}
-              onChange={(v) => updateRoleConfig('lover', v)} />
-            <Stepper label="Маньяк" value={settings.role_config.maniac} min={0} max={1}
-              onChange={(v) => updateRoleConfig('maniac', v)} />
-
-            <div className="lobby-settings__civilians">
-              <span className="lobby-settings__civilians-label">Мирные жители</span>
-              <span className="lobby-settings__civilians-count">{civiliansCount}</span>
-            </div>
-            <p className="lobby-settings__hint">В партии должна быть минимум 1 мафия.</p>
-
-            <div className="lobby-settings__roles-summary">
-              <span>Спец. ролей: {specialCount}</span>
-              <span>Всего игроков: {players.length}</span>
-              {specialCount > players.length && (
-                <span className="lobby-settings__roles-warning">
-                  Спец. ролей больше, чем игроков!
-                </span>
-              )}
-            </div>
-
-            {settingsError && (
-              <div className="lobby-start__error" onClick={() => setSettingsError(null)}>
-                {settingsError}
-              </div>
-            )}
-          </div>
+          {settingsError && (
+            <Alert variant="error" onDismiss={() => setSettingsError(null)}>
+              {settingsError}
+            </Alert>
+          )}
 
           <div className="lobby-settings__section">
             <h4 className="lobby-settings__section-title">Сюжет</h4>

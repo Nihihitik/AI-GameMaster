@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useGameStore, CheckResultEntry } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
-import PauseButton from './PauseButton';
 import { useCountdown } from '../../hooks/useCountdown';
+import AmbientBackground from '../ui/AmbientBackground';
+import Timer from '../ui/Timer';
+import Badge from '../ui/Badge';
+import SelectableCard from '../ui/SelectableCard';
+import GameScreenHeader from './GameScreenHeader';
 import './NightActionScreen.scss';
 
 export default function NightActionScreen() {
@@ -71,7 +75,7 @@ export default function NightActionScreen() {
     return map;
   }, [checkResults]);
 
-  const getTargetState = (targetId: string): 'default' | 'selected' | 'checked-mafia' | 'checked-city' | 'blocked' => {
+  const getTargetState = (targetId: string): 'default' | 'selected' | 'checked-mafia' | 'checked-city' => {
     const result = checkResultMap.get(targetId);
     if (result) {
       if (result.actionType === 'don_check') {
@@ -93,12 +97,6 @@ export default function NightActionScreen() {
     return false;
   };
 
-  const formatTime = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return `${m}:${sec.toString().padStart(2, '0')}`;
-  };
-
   const getActionTitle = () => {
     switch (actionType) {
       case 'kill': return 'Ход Мафии';
@@ -117,7 +115,7 @@ export default function NightActionScreen() {
     const isMafia = isCheck
       ? showCheckResult.team === 'mafia'
       : isDonCheck
-        ? !!showCheckResult.isSheriff // for don: "match" — we show similar alerting
+        ? !!showCheckResult.isSheriff
         : false;
     const targetName = availableTargets.find((t) => t.player_id === showCheckResult.targetId)?.name || '???';
 
@@ -132,7 +130,7 @@ export default function NightActionScreen() {
 
     return (
       <div className={`night-action night-action--check-result ${isMafia ? 'night-action--found' : 'night-action--clean'}`}>
-        <div className="night-action__ambient" />
+        <AmbientBackground variant={isMafia ? 'found' : 'clean'} />
         <div className="night-action__check-result-content">
           <div className={`night-action__result-badge ${isMafia ? 'night-action__result-badge--mafia' : 'night-action__result-badge--city'}`}>
             {isMafia ? (
@@ -162,18 +160,12 @@ export default function NightActionScreen() {
 
   return (
     <div className="night-action">
-      <div className="night-action__ambient" />
-      <div className="night-action__blob night-action__blob--1" />
-      <div className="night-action__blob night-action__blob--2" />
-      <div className="night-action__blob night-action__blob--3" />
+      <AmbientBackground variant="night" blobs={3} />
 
-      <header className="night-action__header">
-        <PauseButton />
-        <h2 className="night-action__title">{getActionTitle()}</h2>
-        <div className={`night-action__timer ${timeLeft <= 5 ? 'night-action__timer--danger' : ''}`}>
-          {formatTime(timeLeft)}
-        </div>
-      </header>
+      <GameScreenHeader
+        title={getActionTitle()}
+        timer={<Timer seconds={timeLeft} dangerThreshold={5} />}
+      />
 
       <div className="night-action__label">{actionLabel}</div>
 
@@ -202,10 +194,18 @@ export default function NightActionScreen() {
           const disabled = isTargetDisabled(target.player_id);
           const hidden = hiddenResults.has(target.player_id);
 
+          const rightSlot =
+            state === 'checked-mafia' ? <Badge variant="mafia">МАФИЯ</Badge>
+            : state === 'checked-city' ? <Badge variant="city">ЧИСТ</Badge>
+            : null;
+
           return (
-            <button
+            <SelectableCard
               key={target.player_id}
-              className={`night-action__target night-action__target--${state} ${disabled ? 'night-action__target--disabled' : ''} ${hidden ? 'night-action__target--hidden' : ''}`}
+              state={state}
+              disabled={disabled}
+              hidden={hidden}
+              rightSlot={rightSlot}
               onClick={() => {
                 if (disabled) return;
                 if (state === 'checked-mafia') {
@@ -214,16 +214,9 @@ export default function NightActionScreen() {
                 }
                 setSelectedTarget(target.player_id);
               }}
-              disabled={disabled}
             >
-              <span className="night-action__target-name">{target.name}</span>
-              {state === 'checked-mafia' && (
-                <span className="night-action__target-badge night-action__target-badge--mafia">МАФИЯ</span>
-              )}
-              {state === 'checked-city' && (
-                <span className="night-action__target-badge night-action__target-badge--city">ЧИСТ</span>
-              )}
-            </button>
+              {target.name}
+            </SelectableCard>
           );
         })}
       </div>

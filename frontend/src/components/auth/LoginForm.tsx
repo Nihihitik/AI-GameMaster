@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Input from '../ui/Input';
 import Button, { LinkButton } from '../ui/Button';
+import Alert from '../ui/Alert';
 import { authApi } from '../../api/authApi';
 import { useAuthStore } from '../../stores/authStore';
 import { getApiErrorMessage } from '../../utils/getApiErrorMessage';
@@ -72,7 +73,7 @@ export default function LoginForm({ onToggle }: LoginFormProps) {
         autoComplete="current-password"
       />
 
-      {error && <div className="auth-form__error">{error}</div>}
+      {error && <Alert variant="error">{error}</Alert>}
 
       <div className="auth-form__actions">
         <Button type="submit" disabled={!isFormValid} loading={loading}>

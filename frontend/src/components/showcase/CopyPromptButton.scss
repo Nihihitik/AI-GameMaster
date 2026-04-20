@@ -1,0 +1,52 @@
+.copy-prompt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-sp-2);
+  padding: 8px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ui-foreground);
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-r-md);
+  cursor: pointer;
+  transition: all var(--ui-t-normal);
+
+  &:hover:not(:disabled) {
+    background: var(--ui-bg);
+    border-color: var(--ui-border-strong);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--ui-ring);
+    outline-offset: 2px;
+  }
+
+  &__icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+
+    svg {
+      width: 100%;
+      height: 100%;
+    }
+  }
+
+  &__label {
+    line-height: 1;
+  }
+
+  &--copied {
+    color: var(--ui-success);
+    border-color: var(--ui-success);
+  }
+
+  &--error {
+    color: var(--ui-destructive);
+    border-color: var(--ui-destructive);
+  }
+}

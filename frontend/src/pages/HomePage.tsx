@@ -3,11 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
-import Stepper from '../components/ui/Stepper';
-import Slider from '../components/ui/Slider';
-import { useSessionStore, MIN_PLAYERS, MAX_PLAYERS, getSpecialRolesCount, getCiviliansCount } from '../stores/sessionStore';
+import Alert from '../components/ui/Alert';
+import SessionSettingsForm from '../components/session/SessionSettingsForm';
+import { useSessionStore, getSpecialRolesCount } from '../stores/sessionStore';
 import { useAuthStore } from '../stores/authStore';
-import { RoleConfig } from '../types/game';
+import { RoleConfig, SessionSettings } from '../types/game';
 import { subscriptionsApi } from '../api/subscriptionsApi';
 import { authApi } from '../api/authApi';
 import { devApi } from '../api/devApi';
@@ -42,14 +42,15 @@ export default function HomePage() {
   const navigate = useNavigate();
   usePageViewLogger('HomePage');
 
-  const specialCount = getSpecialRolesCount(createSettings.role_config);
-  const civiliansCount = getCiviliansCount(playerCount, createSettings.role_config);
-
   const updateRoleConfig = (key: keyof RoleConfig, value: number) => {
     setCreateSettings((s) => ({
       ...s,
       role_config: { ...s.role_config, [key]: value },
     }));
+  };
+
+  const updateTimers = (partial: Partial<SessionSettings>) => {
+    setCreateSettings((s) => ({ ...s, ...partial }));
   };
 
   const handleOpenCreate = () => {
@@ -59,6 +60,7 @@ export default function HomePage() {
   };
 
   const handleConfirmCreate = async () => {
+    const specialCount = getSpecialRolesCount(createSettings.role_config);
     if (specialCount > playerCount) {
       setCreateError('Специальных ролей больше, чем игроков');
       return;
@@ -229,7 +231,7 @@ export default function HomePage() {
             </span>
           </button>
         </div>
-        {createError && <div className="auth-form__error">{createError}</div>}
+        {createError && <Alert variant="error" compact>{createError}</Alert>}
       </main>
 
       <Modal
@@ -282,78 +284,16 @@ export default function HomePage() {
             />
           </div>
 
-          <div className="create-modal__section">
-            <h4 className="create-modal__section-title">Игроки</h4>
-            <Slider
-              label="Количество игроков"
-              value={playerCount}
-              min={MIN_PLAYERS}
-              max={MAX_PLAYERS}
-              step={1}
-              unit="чел"
-              onChange={setPlayerCount}
-            />
-          </div>
+          <SessionSettingsForm
+            settings={createSettings}
+            onChangeTimers={updateTimers}
+            onChangeRoleConfig={updateRoleConfig}
+            playerCount={playerCount}
+            onChangePlayerCount={setPlayerCount}
+            showPlayerCountSlider
+          />
 
-          <div className="create-modal__section">
-            <h4 className="create-modal__section-title">Таймеры</h4>
-            <Slider
-              label="Обсуждение"
-              value={createSettings.discussion_timer_seconds}
-              min={30}
-              max={300}
-              step={10}
-              onChange={(v) => setCreateSettings((s) => ({ ...s, discussion_timer_seconds: v }))}
-            />
-            <Slider
-              label="Голосование"
-              value={createSettings.voting_timer_seconds}
-              min={15}
-              max={120}
-              step={5}
-              onChange={(v) => setCreateSettings((s) => ({ ...s, voting_timer_seconds: v }))}
-            />
-            <Slider
-              label="Ночные действия"
-              value={createSettings.night_action_timer_seconds}
-              min={15}
-              max={60}
-              step={5}
-              onChange={(v) => setCreateSettings((s) => ({ ...s, night_action_timer_seconds: v }))}
-            />
-            <Slider
-              label="Ознакомление с ролью"
-              value={createSettings.role_reveal_timer_seconds}
-              min={10}
-              max={30}
-              step={1}
-              onChange={(v) => setCreateSettings((s) => ({ ...s, role_reveal_timer_seconds: v }))}
-            />
-          </div>
-
-          <div className="create-modal__section">
-            <h4 className="create-modal__section-title">Роли</h4>
-            <Stepper label="Мафия" value={createSettings.role_config.mafia} min={1} max={2}
-              onChange={(v) => updateRoleConfig('mafia', v)} />
-            <Stepper label="Дон Мафии" value={createSettings.role_config.don} min={0} max={1}
-              onChange={(v) => updateRoleConfig('don', v)} />
-            <Stepper label="Шериф" value={createSettings.role_config.sheriff} min={0} max={1}
-              onChange={(v) => updateRoleConfig('sheriff', v)} />
-            <Stepper label="Доктор" value={createSettings.role_config.doctor} min={0} max={1}
-              onChange={(v) => updateRoleConfig('doctor', v)} />
-            <Stepper label="Любовница" value={createSettings.role_config.lover} min={0} max={1}
-              onChange={(v) => updateRoleConfig('lover', v)} />
-            <Stepper label="Маньяк" value={createSettings.role_config.maniac} min={0} max={1}
-              onChange={(v) => updateRoleConfig('maniac', v)} />
-
-            <div className="create-modal__civilians">
-              <span className="create-modal__civilians-label">Мирные жители</span>
-              <span className="create-modal__civilians-count">{civiliansCount}</span>
-            </div>
-            <div className="create-modal__hint">В партии должна быть минимум 1 мафия.</div>
-          </div>
-
-          {createError && <div className="create-modal__error">{createError}</div>}
+          {createError && <Alert variant="error">{createError}</Alert>}
 
           <div className="create-modal__actions">
             <Button onClick={handleConfirmCreate} disabled={creating}>
@@ -382,12 +322,12 @@ export default function HomePage() {
               <span className="pro-modal__benefit-text">Pro: до 16 игроков + новые роли (Дон, Любовница, Маньяк)</span>
             </div>
           </div>
-          
+
           <div className="pro-modal__warning">
             <p>⚠️ Это dev-мокап — реальная оплата не проводится. Подписка Pro на 30 дней выдаётся бесплатно для тестирования.</p>
           </div>
 
-          {upgradeError && <div className="pro-modal__error">{upgradeError}</div>}
+          {upgradeError && <Alert variant="error">{upgradeError}</Alert>}
 
           <div className="pro-modal__actions">
             <Button onClick={() => setShowProModal(false)} disabled={upgrading}>

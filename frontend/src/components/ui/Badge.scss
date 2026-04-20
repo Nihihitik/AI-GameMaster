@@ -1,0 +1,60 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+
+  &--sm {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 8px;
+  }
+
+  &--md {
+    font-size: 12px;
+    padding: 4px 14px;
+    border-radius: 20px;
+    letter-spacing: 1px;
+    font-weight: 700;
+  }
+
+  &--default {
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  &--host {
+    background: rgba(200, 30, 30, 0.12);
+    color: #c81e1e;
+  }
+
+  &--mafia {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+  }
+
+  &--city {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.45);
+  }
+
+  &--pro {
+    background: rgba(200, 30, 30, 0.15);
+    color: #ff4444;
+    border: 1px solid rgba(200, 30, 30, 0.3);
+  }
+
+  &--dead {
+    background: rgba(0, 0, 0, 0.5);
+    color: rgba(255, 255, 255, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  &--blocked {
+    background: rgba(255, 180, 50, 0.15);
+    color: rgba(255, 180, 50, 0.9);
+  }
+}

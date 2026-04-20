@@ -2,8 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Checkbox from '../components/ui/Checkbox';
-import Loader from '../components/ui/Loader';
-import PauseButton from '../components/game/PauseButton';
+import Badge from '../components/ui/Badge';
+import Timer from '../components/ui/Timer';
+import WaitingBlock from '../components/ui/WaitingBlock';
+import GameScreenHeader from '../components/game/GameScreenHeader';
 import { useSessionStore } from '../stores/sessionStore';
 import { mockStories } from '../mocks/sessionMocks';
 import { useCountdown } from '../hooks/useCountdown';
@@ -165,31 +167,18 @@ export default function StorySelectionPage() {
     }
   };
 
-  const formatTime = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return `${m}:${sec.toString().padStart(2, '0')}`;
-  };
-
   const randomStoryForReveal = mockStories[revealIndex % mockStories.length];
+  const isVotingPhase = phase === 'voting';
 
   return (
     <div className="story-page">
-      <header className="story-header">
-        {phase === 'voting' ? (
-          <PauseButton className="story-header__pause" />
-        ) : (
-          <div style={{ width: 40 }} />
-        )}
-        <h1 className="story-header__title">Выбор сюжета</h1>
-        {phase === 'voting' ? (
-          <div className={`story-header__timer ${timeLeft <= 10 ? 'story-header__timer--danger' : ''}`}>
-            {formatTime(timeLeft)}
-          </div>
-        ) : (
-          <div className="story-header__voted">{votedCount}/{total}</div>
-        )}
-      </header>
+      <GameScreenHeader
+        title="Выбор сюжета"
+        showPause={isVotingPhase}
+        pauseSlot={isVotingPhase ? undefined : <span className="story-header__spacer" />}
+        timer={isVotingPhase ? <Timer seconds={timeLeft} dangerThreshold={10} /> : undefined}
+        right={!isVotingPhase ? <div className="story-header__voted">{votedCount}/{total}</div> : undefined}
+      />
 
       <main className="story-main">
         {phase === 'revealing' && (
@@ -210,7 +199,7 @@ export default function StorySelectionPage() {
 
         {phase === 'done' && winnerStory && (
           <div className="story-result">
-            <div className="story-result__badge">Выбранный сюжет</div>
+            <Badge variant="default" size="md" className="story-result__badge">Выбранный сюжет</Badge>
             <div className="story-result__card">
               <div className="story-result__placeholder">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
@@ -268,12 +257,7 @@ export default function StorySelectionPage() {
             )}
 
             {phase === 'waiting' && (
-              <div className="story-waiting">
-                <Loader size={32} />
-                <p className="story-waiting__text">
-                  Ожидание голосов: {votedCount}/{total}
-                </p>
-              </div>
+              <WaitingBlock text={`Ожидание голосов: ${votedCount}/${total}`} loaderSize={32} />
             )}
           </>
         )}

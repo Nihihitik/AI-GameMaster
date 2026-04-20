@@ -2,8 +2,11 @@ import React, { useMemo } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { Player } from '../../types/game';
-import PauseButton from './PauseButton';
 import { useCountdown } from '../../hooks/useCountdown';
+import AmbientBackground from '../ui/AmbientBackground';
+import Timer from '../ui/Timer';
+import Badge from '../ui/Badge';
+import GameScreenHeader from './GameScreenHeader';
 import './DayDiscussionScreen.scss';
 
 export default function DayDiscussionScreen() {
@@ -22,12 +25,6 @@ export default function DayDiscussionScreen() {
     resetKey: phase?.id ?? 'discussion',
   });
 
-  const formatTime = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return `${m}:${sec.toString().padStart(2, '0')}`;
-  };
-
   const { alivePlayers, deadPlayers } = useMemo(() => {
     const alive: Player[] = [];
     const dead: Player[] = [];
@@ -39,15 +36,12 @@ export default function DayDiscussionScreen() {
 
   return (
     <div className="day-discussion">
-      <div className="day-discussion__ambient" />
+      <AmbientBackground variant="day" />
 
-      <header className="day-discussion__header">
-        <PauseButton />
-        <h2 className="day-discussion__title">Обсуждение</h2>
-        <div className={`day-discussion__timer ${timeLeft <= 10 ? 'day-discussion__timer--danger' : ''}`}>
-          {formatTime(timeLeft)}
-        </div>
-      </header>
+      <GameScreenHeader
+        title="Обсуждение"
+        timer={<Timer seconds={timeLeft} dangerThreshold={10} />}
+      />
 
       {nightResultDied && nightResultDied.length > 0 && (
         <div className="day-discussion__night-result">
@@ -82,7 +76,7 @@ export default function DayDiscussionScreen() {
             <div className="day-discussion__player-number">{player.join_order}</div>
             <span className="day-discussion__player-name">{player.name}</span>
             {player.id === dayBlockedPlayer && (
-              <span className="day-discussion__player-tag">Заблокирован</span>
+              <Badge variant="blocked">Заблокирован</Badge>
             )}
           </div>
         ))}

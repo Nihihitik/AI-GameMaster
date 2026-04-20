@@ -1,0 +1,30 @@
+.showcase-section {
+  margin-bottom: var(--ui-sp-12);
+  scroll-margin-top: var(--ui-sp-10);
+
+  &__head {
+    margin-bottom: var(--ui-sp-5);
+    padding-bottom: var(--ui-sp-4);
+    border-bottom: 1px solid var(--ui-border);
+  }
+
+  &__title {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--ui-foreground);
+    margin: 0 0 var(--ui-sp-2);
+    line-height: 1.25;
+  }
+
+  &__desc {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ui-muted);
+    line-height: 1.5;
+  }
+
+  &__items {
+    display: flex;
+    flex-direction: column;
+  }
+}

@@ -1,0 +1,24 @@
+.waiting-block {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+
+  &--column {
+    flex-direction: column;
+    padding: 24px 0;
+  }
+
+  &--row {
+    flex-direction: row;
+    gap: 10px;
+  }
+
+  &__text {
+    margin: 0;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.4);
+    text-align: center;
+    line-height: 1.4;
+  }
+}

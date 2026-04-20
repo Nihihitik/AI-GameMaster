@@ -5,7 +5,17 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { gameApi } from '../../api/gameApi';
 import { sessionApi } from '../../api/sessionApi';
 import { getRoleInfo, CARD_BACK_IMAGE } from '../../utils/roles';
+import AmbientBackground from '../ui/AmbientBackground';
+import Avatar from '../ui/Avatar';
+import Alert from '../ui/Alert';
 import './FinaleScreen.scss';
+
+const DeadIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
 
 function getStatusFromError(err: unknown): number | null {
   return (err as { response?: { status?: number } })?.response?.status ?? null;
@@ -93,7 +103,7 @@ export default function FinaleScreen() {
 
   return (
     <div className={`finale ${isCityWin ? 'finale--city' : 'finale--mafia'}`}>
-      <div className="finale__ambient" />
+      <AmbientBackground variant={isCityWin ? 'finale-city' : 'finale-mafia'} />
 
       <div className="finale__content">
         <div className="finale__trophy">
@@ -128,21 +138,16 @@ export default function FinaleScreen() {
                   key={player.id}
                   className={`finale__player ${player.status === 'dead' ? 'finale__player--dead' : ''} ${team === 'mafia' ? 'finale__player--mafia' : 'finale__player--city'}`}
                 >
-                  <div className="finale__player-avatar">
-                    <img
-                      src={info?.image ?? CARD_BACK_IMAGE}
-                      alt={displayName}
-                      className="finale__player-avatar-img"
-                    />
-                    {player.status === 'dead' && (
-                      <div className="finale__player-dead-overlay">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <line x1="18" y1="6" x2="6" y2="18" />
-                          <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
-                      </div>
-                    )}
-                  </div>
+                  <Avatar
+                    variant="image"
+                    shape="rounded"
+                    size={44}
+                    src={info?.image ?? CARD_BACK_IMAGE}
+                    ariaLabel={displayName}
+                    team={team === 'mafia' ? 'mafia' : 'city'}
+                    overlay={player.status === 'dead' ? <DeadIcon /> : undefined}
+                    className="finale__player-avatar"
+                  />
                   <div className="finale__player-info">
                     <span className="finale__player-name">{player.name}</span>
                     <span className={`finale__player-role ${team === 'mafia' ? 'finale__player-role--mafia' : ''}`}>
@@ -156,7 +161,7 @@ export default function FinaleScreen() {
         </div>
 
         <div className="finale__actions">
-          {error && <div className="finale__error">{error}</div>}
+          {error && <Alert variant="error" compact>{error}</Alert>}
           <button
             className="finale__lobby-btn"
             onClick={handleBackToLobby}

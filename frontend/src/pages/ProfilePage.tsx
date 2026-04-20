@@ -8,9 +8,28 @@ import { parseApiError } from '../utils/parseApiError';
 import { getApiErrorMessage } from '../utils/getApiErrorMessage';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
+import Avatar from '../components/ui/Avatar';
+import Badge from '../components/ui/Badge';
+import PageHeader from '../components/ui/PageHeader';
+import SubscriptionPlanCard from '../components/profile/SubscriptionPlanCard';
+import PasswordChangeForm from '../components/profile/PasswordChangeForm';
 import { logger } from '../services/logger';
 import { usePageViewLogger } from '../hooks/usePageViewLogger';
 import './ProfilePage.scss';
+
+const UserIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
+  </svg>
+);
+
+const EditIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+  </svg>
+);
 
 export default function ProfilePage() {
   const navigate = useNavigate();
@@ -19,11 +38,6 @@ export default function ProfilePage() {
   const logout = useAuthStore((s) => s.logout);
 
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [passwordError, setPasswordError] = useState('');
-  const [passwordSuccess, setPasswordSuccess] = useState('');
-  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   // Подписка
   const [subscription, setSubscription] = useState<SubscriptionStatusResponse | null>(null);
@@ -78,29 +92,6 @@ export default function ProfilePage() {
     }
   };
 
-  const handlePasswordChange = () => {
-    setPasswordError('');
-    setPasswordSuccess('');
-
-    if (newPassword.length < 6) {
-      setPasswordError('Новый пароль должен содержать минимум 6 символов');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setPasswordError('Пароли не совпадают');
-      return;
-    }
-
-    setIsChangingPassword(true);
-    // TODO: бэк пока не предоставляет эндпоинт смены пароля — оставляем заглушку.
-    setTimeout(() => {
-      setIsChangingPassword(false);
-      setPasswordSuccess('Пароль успешно изменён');
-      setNewPassword('');
-      setConfirmPassword('');
-    }, 1000);
-  };
-
   const handleLogout = async () => {
     await logout();
     logger.info('auth.logout_submit', 'Profile logout completed');
@@ -148,15 +139,7 @@ export default function ProfilePage() {
   if (!user) {
     return (
       <div className="profile-page">
-        <header className="profile-header">
-          <button className="profile-header__back" onClick={() => navigate(-1)}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-          </button>
-          <h1 className="profile-header__title">Профиль</h1>
-          <div className="profile-header__spacer" />
-        </header>
+        <PageHeader title="Профиль" onBack={() => navigate(-1)} />
         <main className="profile-main">
           <p style={{ textAlign: 'center', color: '#888' }}>Загрузка профиля...</p>
         </main>
@@ -171,37 +154,21 @@ export default function ProfilePage() {
 
   return (
     <div className="profile-page">
-      <header className="profile-header">
-        <button className="profile-header__back" onClick={() => navigate(-1)}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <polyline points="15 18 9 12 15 6" />
-          </svg>
-        </button>
-        <h1 className="profile-header__title">Профиль</h1>
-        <div className="profile-header__spacer" />
-      </header>
+      <PageHeader title="Профиль" onBack={() => navigate(-1)} />
 
       <main className="profile-main">
         {/* Avatar Section */}
         <div className="profile-avatar-section" onClick={handleAvatarClick}>
-          <div className="profile-avatar">
-            {avatarUrl ? (
-              <img src={avatarUrl} alt="Avatar" className="profile-avatar__img" />
-            ) : (
-              <div className="profile-avatar__placeholder">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <circle cx="12" cy="8" r="4" />
-                  <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" />
-                </svg>
-              </div>
-            )}
-            <div className="profile-avatar__edit">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-              </svg>
-            </div>
-          </div>
+          <Avatar
+            variant={avatarUrl ? 'image' : 'icon'}
+            size={100}
+            src={avatarUrl ?? undefined}
+            icon={<UserIcon />}
+            overlay={<EditIcon />}
+            onClick={handleAvatarClick}
+            className="profile-avatar"
+            ariaLabel="Аватар"
+          />
           <input
             type="file"
             ref={fileInputRef}
@@ -276,116 +243,21 @@ export default function ProfilePage() {
             </svg>
             <span className="profile-section__label">Изменить пароль</span>
           </div>
-          <div className="profile-password-form">
-            <Input
-              type="password"
-              label="Новый пароль"
-              value={newPassword}
-              onChange={setNewPassword}
-              autoComplete="new-password"
-            />
-            <Input
-              type="password"
-              label="Подтвердите пароль"
-              value={confirmPassword}
-              onChange={setConfirmPassword}
-              autoComplete="new-password"
-            />
-            {passwordError && <div className="profile-password-form__error">{passwordError}</div>}
-            {passwordSuccess && <div className="profile-password-form__success">{passwordSuccess}</div>}
-            <Button
-              onClick={handlePasswordChange}
-              loading={isChangingPassword}
-              disabled={isChangingPassword}
-            >
-              Сохранить пароль
-            </Button>
-          </div>
+          <PasswordChangeForm />
         </div>
 
         {/* Subscription Section */}
         <div className="profile-subscription">
           <div className="profile-subscription__header">
             <h2 className="profile-subscription__title">Подписка</h2>
-            <span className={`profile-subscription__badge ${isPro ? 'profile-subscription__badge--pro' : ''}`}>
+            <Badge variant={isPro ? 'pro' : 'default'} size="md">
               {subscriptionLoading ? '...' : isPro ? 'PRO' : 'Обычная'}
-            </span>
+            </Badge>
           </div>
 
           <div className="profile-subscription__plans">
-            {/* Free Plan */}
-            <div className={`profile-plan ${!isPro ? 'profile-plan--active' : ''}`}>
-              <div className="profile-plan__header">
-                <h3 className="profile-plan__name">Обычная</h3>
-                <span className="profile-plan__price">Бесплатно</span>
-              </div>
-              <ul className="profile-plan__features">
-                <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12" /></svg>
-                  <span>Базовые роли (Мафия, Шериф, Доктор)</span>
-                </li>
-                <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12" /></svg>
-                  <span>До 12 игроков</span>
-                </li>
-                <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12" /></svg>
-                  <span>1 игровая сессия одновременно</span>
-                </li>
-                <li className="profile-plan__feature--disabled">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-                  <span>Дополнительные сюжеты</span>
-                </li>
-                <li className="profile-plan__feature--disabled">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
-                  <span>Новые голоса ведущего</span>
-                </li>
-              </ul>
-            </div>
-
-            {/* Pro Plan */}
-            <div className={`profile-plan profile-plan--pro ${isPro ? 'profile-plan--active' : ''}`}>
-              <div className="profile-plan__glow" />
-              <div className="profile-plan__header">
-                <h3 className="profile-plan__name">
-                  PRO
-                  <span className="profile-plan__crown">
-                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2 20h20l-2-8-4 4-4-8-4 8-4-4z" /></svg>
-                  </span>
-                </h3>
-                <div className="profile-plan__price-group">
-                  <span className="profile-plan__price">149 ₽</span>
-                  <span className="profile-plan__period">/месяц</span>
-                </div>
-              </div>
-              <ul className="profile-plan__features">
-                <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12" /></svg>
-                  <span>Все базовые роли + Дон, Любовница, Маньяк</span>
-                </li>
-                <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12" /></svg>
-                  <span>До 16 игроков</span>
-                </li>
-                <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12" /></svg>
-                  <span>До 5 игровых сессий одновременно</span>
-                </li>
-                <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12" /></svg>
-                  <span>Эксклюзивные сюжеты</span>
-                </li>
-                <li>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12" /></svg>
-                  <span>Новые голоса ведущего</span>
-                </li>
-              </ul>
-              {!isPro && (
-                <button className="profile-plan__upgrade-btn">
-                  Оформить PRO
-                </button>
-              )}
-            </div>
+            <SubscriptionPlanCard plan="free" active={!isPro} />
+            <SubscriptionPlanCard plan="pro" active={isPro} onUpgrade={!isPro ? () => {} : undefined} />
           </div>
         </div>
 

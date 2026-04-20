@@ -1,0 +1,38 @@
+.ui-page {
+  --ui-bg: #fafafa;
+  --ui-surface: #ffffff;
+  --ui-foreground: #09090b;
+  --ui-muted: #71717a;
+  --ui-muted-soft: #a1a1aa;
+  --ui-border: #e4e4e7;
+  --ui-border-strong: #d4d4d8;
+  --ui-accent: #18181b;
+  --ui-accent-fg: #fafafa;
+  --ui-success: #22c55e;
+  --ui-destructive: #ef4444;
+  --ui-ring: rgba(9, 9, 11, 0.1);
+
+  --ui-stage: #0a0a0a;
+  --ui-stage-border: rgba(255, 255, 255, 0.08);
+
+  --ui-sp-1: 4px;
+  --ui-sp-2: 8px;
+  --ui-sp-3: 12px;
+  --ui-sp-4: 16px;
+  --ui-sp-5: 20px;
+  --ui-sp-6: 24px;
+  --ui-sp-8: 32px;
+  --ui-sp-10: 40px;
+  --ui-sp-12: 48px;
+  --ui-sp-16: 64px;
+
+  --ui-r-sm: 6px;
+  --ui-r-md: 8px;
+  --ui-r-lg: 12px;
+
+  --ui-t-fast: 120ms ease;
+  --ui-t-normal: 180ms ease;
+  --ui-t-slow: 280ms ease;
+
+  --ui-mono: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+}

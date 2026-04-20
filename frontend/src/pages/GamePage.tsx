@@ -11,11 +11,12 @@ import NightWaitingScreen from '../components/game/NightWaitingScreen';
 import DayDiscussionScreen from '../components/game/DayDiscussionScreen';
 import DayVotingScreen from '../components/game/DayVotingScreen';
 import FinaleScreen from '../components/game/FinaleScreen';
-import PauseButton from '../components/game/PauseButton';
 import RulesModal, { RulesButton } from '../components/game/RulesModal';
+import GameScreenHeader from '../components/game/GameScreenHeader';
 import DevPlayerQuickPill from '../components/dev/DevPlayerQuickPill';
 import Button from '../components/ui/Button';
 import Loader from '../components/ui/Loader';
+import Timer from '../components/ui/Timer';
 import { useCountdown } from '../hooks/useCountdown';
 import { logger } from '../services/logger';
 import { usePageViewLogger } from '../hooks/usePageViewLogger';
@@ -178,12 +179,6 @@ export default function GamePage() {
     acknowledgeRoleAsync().catch(() => {});
   };
 
-  const formatTime = (s: number) => {
-    const m = Math.floor(s / 60);
-    const sec = s % 60;
-    return `${m}:${sec.toString().padStart(2, '0')}`;
-  };
-
   if (loading) {
     return (
       <div className="game-loading">
@@ -234,16 +229,11 @@ export default function GamePage() {
       case 'role_reveal':
         return (
           <div className={`role-page ${!flipped ? 'role-page--preflip' : ''}`}>
-            <header className="role-header">
-              <PauseButton className="role-header__pause" />
-              <h1 className="role-header__title">Ваша роль</h1>
-              <div className="game-header-right">
-                <RulesButton onClick={() => setShowRules(true)} />
-                <div className={`role-header__timer-display ${timeLeft <= 5 ? 'role-header__timer-display--danger' : ''}`}>
-                  {formatTime(timeLeft)}
-                </div>
-              </div>
-            </header>
+            <GameScreenHeader
+              title="Ваша роль"
+              right={<RulesButton onClick={() => setShowRules(true)} />}
+              timer={<Timer seconds={timeLeft} dangerThreshold={5} />}
+            />
 
             <main className="role-main">
               <div className={`role-card ${flipped ? 'role-card--flipped' : ''}`} onClick={handleFlip}>

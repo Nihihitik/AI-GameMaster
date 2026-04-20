@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
+import AmbientBackground from '../ui/AmbientBackground';
+import ProgressBar from '../ui/ProgressBar';
 import './NarratorScreen.scss';
 
 const CHAR_INTERVAL_MS = 45;
@@ -92,11 +94,9 @@ export default function NarratorScreen() {
 
   return (
     <div className="narrator-screen">
-      <div className="narrator-screen__ambient" />
+      <AmbientBackground variant="narrator" />
 
-      <div className="narrator-screen__progress">
-        <div className="narrator-screen__progress-bar" style={{ width: `${progress}%` }} />
-      </div>
+      <ProgressBar value={progress} variant="narrator" />
 
       <div className="narrator-screen__content">
         <div className="narrator-screen__icon">

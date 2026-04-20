@@ -1,0 +1,42 @@
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.3s ease;
+  flex-shrink: 0;
+
+  svg {
+    width: 50%;
+    height: 50%;
+  }
+
+  &--circle {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.7);
+
+    &:hover:not(:disabled) {
+      border-color: rgba(200, 30, 30, 0.4);
+      color: #ff4444;
+      background: rgba(200, 30, 30, 0.1);
+    }
+  }
+
+  &--ghost {
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.45);
+
+    &:hover:not(:disabled) {
+      color: rgba(255, 255, 255, 0.85);
+    }
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
