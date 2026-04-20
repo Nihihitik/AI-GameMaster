@@ -37,6 +37,20 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _ensure_announcement_started_at(announcement, started_at):
+    """Гарантирует, что в announcement-payload есть `started_at` (ISO8601).
+
+    Нужно для синхронизации typewriter/прогресс-бара между клиентами и при reload.
+    """
+    if not isinstance(announcement, dict):
+        return announcement
+    if announcement.get("started_at"):
+        return announcement
+    if started_at is None:
+        return announcement
+    return {**announcement, "started_at": started_at.isoformat()}
+
+
 @router.post("/{session_id}/start")
 async def start(
     session_id: uuid.UUID,
@@ -417,6 +431,15 @@ async def state(
     # shows the frozen value instead of a stale countdown hitting 0.
     effective_timer_seconds = rt.timer_seconds
     effective_timer_started_at = rt.timer_started_at.isoformat() if rt.timer_started_at else None
+    # Fallback для role_reveal: phase_changed event для этой фазы не персистится,
+    # поэтому после рестарта backend runtime пуст. Берём данные из самой фазы.
+    if (
+        phase is not None
+        and phase.phase_type == "role_reveal"
+        and (effective_timer_started_at is None or effective_timer_seconds is None)
+    ):
+        effective_timer_started_at = phase.started_at.isoformat()
+        effective_timer_seconds = int((session.settings or {}).get("role_reveal_timer_seconds") or 15)
     if paused:
         gp_snap = ((session.settings or {}).get("game_pause") or {}).get("snapshot") or {}
         snap_remaining = gp_snap.get("remaining_seconds")
@@ -426,6 +449,7 @@ async def state(
 
     response = {
         "session_status": session.status,
+        "session_code": session.code,
         "game_paused": paused,
         "settings": session.settings or {},
         "phase": {
@@ -458,7 +482,7 @@ async def state(
         "action_type": None,
         "available_targets": [],
         "my_action_submitted": False,
-        "announcement": rt.current_announcement,
+        "announcement": _ensure_announcement_started_at(rt.current_announcement, rt.announcement_started_at),
     }
 
     if phase and phase.phase_type == "day":
@@ -633,37 +657,58 @@ async def reset_to_lobby(
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Reset a finished game session back to lobby (waiting) state.
+    """Возвращает текущего игрока в лобби (индивидуально).
 
-    Only the host can do this. Clears game phases, events, night actions, day votes,
-    resets all players to alive, and sets session.status = 'waiting'.
+    Семантика:
+      - status == "active" → 409.
+      - status == "finished":
+        * Если игрок ЕСТЬ в сессии — он первый нажавший: становится новым хостом,
+          сбрасывает игру в waiting, удаляет всех других игроков. Они получат
+          WS-event и при нажатии «Вернуться в лобби» вызовут join (через 403).
+        * Если игрока в сессии НЕТ — другой игрок уже сбросил → 403, фронт делает join.
+      - status == "waiting":
+        * Если игрок уже в сессии — idempotent.
+        * Если игрока нет — 403 (фронт пойдёт в join).
     """
     session = await get_session_or_404(db, session_id)
-    if session.status != "finished":
-        raise GameError(400, "wrong_status", "Сессия не завершена")
 
-    player = await get_player_or_404(db, session_id, current_user.id)
-    if player.join_order != 1:
-        raise GameError(403, "not_host", "Только хост может вернуть в лобби")
+    if session.status == "active":
+        raise GameError(409, "game_in_progress", "Игра ещё идёт")
 
-    # Delete game data
+    my_player = await db.scalar(
+        select(Player).where(Player.session_id == session_id, Player.user_id == current_user.id)
+    )
+
+    if my_player is None:
+        raise GameError(403, "not_in_session", "Сессия уже сброшена другим игроком — присоединитесь по коду")
+
+    if session.status == "waiting":
+        # Idempotent: уже в лобби, ничего не делаем.
+        return {"status": "waiting", "session_code": session.code}
+
+    # status == "finished" и я первый нажавший. Становлюсь хостом, удаляю других, сбрасываю игру.
+    # Сначала удаляем game-data в правильном порядке (events до phases).
     phases = (await db.scalars(select(GamePhase.id).where(GamePhase.session_id == session_id))).all()
     if phases:
         await db.execute(sa_delete(NightAction).where(NightAction.phase_id.in_(phases)))
         await db.execute(sa_delete(DayVote).where(DayVote.phase_id.in_(phases)))
-    await db.execute(sa_delete(GamePhase).where(GamePhase.session_id == session_id))
     await db.execute(sa_delete(GameEvent).where(GameEvent.session_id == session_id))
+    await db.execute(sa_delete(GamePhase).where(GamePhase.session_id == session_id))
 
-    # Reset players
-    all_players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
-    for p in all_players:
-        p.status = "alive"
-        p.role_id = None
+    # Удаляем всех игроков, кроме меня.
+    await db.execute(
+        sa_delete(Player).where(Player.session_id == session_id, Player.id != my_player.id)
+    )
 
-    # Reset session
+    # Сбрасываю себя — alive, без роли, join_order=1.
+    my_player.status = "alive"
+    my_player.role_id = None
+    my_player.join_order = 1
+
+    # Сбрасываю сессию.
     session.status = "waiting"
     session.ended_at = None
-    # Keep settings but remove pause snapshot
+    session.host_user_id = current_user.id  # я теперь хост
     cur = dict(session.settings or {})
     cur.pop("game_pause", None)
     session.settings = cur
@@ -674,7 +719,8 @@ async def reset_to_lobby(
     await timer_service.cancel_all(session_id)
     runtime_state.clear(session_id)
 
-    # Notify all players
+    # Уведомляем всех (старые WS-соединения других игроков ещё открыты с финала),
+    # чтобы они перешли на FinaleScreen → "Вернуться в лобби" работал корректно.
     await ws_manager.send_to_session(
         session_id,
         {
@@ -683,6 +729,7 @@ async def reset_to_lobby(
                 "session_id": str(session_id),
                 "session_code": session.code,
                 "status": "waiting",
+                "new_host_user_id": str(current_user.id),
             },
         },
     )

@@ -205,10 +205,21 @@ const HANDLERS: Record<string, (payload: unknown) => void> = {
   },
 
   session_reset: (payload) => {
-    const code = getPayloadString(payload, 'session_code');
-    useGameStore.getState().reset();
-    if (code && typeof window !== 'undefined') {
-      window.location.href = `/lobby/${code}`;
+    // Новая семантика: первый нажавший «Вернуться в лобби» становится хостом и
+    // сбрасывает сессию. Остальные игроки остаются на FinaleScreen и сами решают:
+    // нажать «Вернуться в лобби» (фронт вызовет reset_to_lobby → 403 → join) или
+    // «На главную». Принудительный redirect отсюда удалён намеренно.
+    const newHostUserId = getPayloadString(payload, 'new_host_user_id');
+    if (newHostUserId) {
+      useSessionStore.getState().applyHostTransfer(newHostUserId);
+    }
+  },
+
+  host_transferred: (payload) => {
+    const newHostUserId = getPayloadString(payload, 'new_host_user_id');
+    const newHostPlayerId = getPayloadString(payload, 'new_host_player_id') ?? null;
+    if (newHostUserId) {
+      useSessionStore.getState().applyHostTransfer(newHostUserId, newHostPlayerId);
     }
   },
 

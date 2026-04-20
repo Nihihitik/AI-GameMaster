@@ -39,28 +39,39 @@ export function useCountdown({
   );
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // При смене ключевых пропов сразу пересчитываем remaining из server-time.
   useEffect(() => {
     setTimeLeft(computeRemainingSeconds(timerSeconds, timerStartedAt, fallbackSeconds));
   }, [fallbackSeconds, resetKey, timerSeconds, timerStartedAt]);
 
   useEffect(() => {
-    if (!enabled || paused || timeLeft <= 0) {
+    if (!enabled || paused) {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
+        intervalRef.current = null;
       }
       return;
     }
 
+    // Пересчёт каждый tick от server-time, а не локальный декремент. Это убирает
+    // дрейф между клиентами, корректно отрабатывает невидимую вкладку (throttled
+    // setInterval) и сразу показывает актуальное значение после reload.
     intervalRef.current = setInterval(() => {
-      setTimeLeft((current) => (current <= 1 ? 0 : current - 1));
+      const next = computeRemainingSeconds(timerSeconds, timerStartedAt, fallbackSeconds);
+      setTimeLeft((current) => (current === next ? current : next));
+      if (next <= 0 && intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     }, 1000);
 
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
+        intervalRef.current = null;
       }
     };
-  }, [enabled, paused, timeLeft]);
+  }, [enabled, paused, timerSeconds, timerStartedAt, fallbackSeconds]);
 
   return timeLeft;
 }

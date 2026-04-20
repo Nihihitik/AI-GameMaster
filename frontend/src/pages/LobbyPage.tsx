@@ -48,7 +48,8 @@ export default function LobbyPage() {
   // чтобы переход в /game/... или /sessions/:code/stories прошёл без закрытия сессии.
   const allowNavigationRef = useRef(false);
 
-  // Общий хелпер: для хоста закрываем всю сессию, для обычного игрока — только его слот.
+  // Всегда вызываем leave: backend сам передаст роль хоста следующему игроку или удалит
+  // пустую сессию. close(session) оставлен как отдельный flow (явного закрытия хостом).
   const leaveSessionIfAny = React.useCallback(async () => {
     if (leavingRef.current) return;
     leavingRef.current = true;
@@ -60,13 +61,9 @@ export default function LobbyPage() {
       return;
     }
     try {
-      if (state.isHost) {
-        await sessionApi.close(current.id);
-      } else {
-        await sessionApi.leave(current.id);
-      }
+      await sessionApi.leave(current.id);
     } catch {
-      // Глушим: если игрока уже нет (404) или сессия уже закрыта — всё равно чистим состояние.
+      // Глушим: если игрока уже нет (404) или сессия уже удалена — всё равно чистим state.
     } finally {
       state.reset();
       wsClient.disconnect();

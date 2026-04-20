@@ -13,6 +13,7 @@ import asyncio
 import logging
 import random
 import uuid
+from datetime import datetime
 
 from sqlalchemy import String, cast, delete, exists, func, select
 from sqlalchemy.exc import IntegrityError
@@ -92,10 +93,35 @@ async def _wait_or_pause(session_id: uuid.UUID, seconds: float) -> None:
         await asyncio.sleep(min(0.2, remaining))
 
 
-async def _set_runtime_announcement(session_id: uuid.UUID, announcement: dict | None) -> None:
+def _stamp_started_at(announcement: dict | None, ts=None) -> dict | None:
+    """Добавляет ISO8601 `started_at` в копию announcement-payload.
+
+    Нужен для синхронизации typewriter/прогресс-бара между клиентами и при reload —
+    клиент сравнивает Date.now() с этой меткой, а не с моментом mount.
+    Если started_at уже задан — возвращается без изменений.
+    """
+    if not announcement:
+        return announcement
+    if "started_at" in announcement and announcement["started_at"]:
+        return announcement
+    stamp = ts or utc_now()
+    return {**announcement, "started_at": stamp.isoformat()}
+
+
+async def _set_runtime_announcement(session_id: uuid.UUID, announcement: dict | None) -> dict | None:
+    """Сохраняет announcement в runtime_state и возвращает его с заштампованным started_at."""
     rt = runtime_state.get(session_id)
-    rt.current_announcement = announcement
-    rt.announcement_started_at = utc_now() if announcement else None
+    if announcement:
+        stamped = _stamp_started_at(announcement)
+        rt.current_announcement = stamped
+        try:
+            rt.announcement_started_at = datetime.fromisoformat(stamped["started_at"])
+        except (ValueError, TypeError):
+            rt.announcement_started_at = utc_now()
+        return stamped
+    rt.current_announcement = None
+    rt.announcement_started_at = None
+    return None
 
 
 async def _emit_phase_changed(
@@ -107,7 +133,14 @@ async def _emit_phase_changed(
     persist: bool = False,
 ) -> None:
     announcement = payload.get("announcement")
-    await _set_runtime_announcement(session_id, announcement if announcement and announcement.get("blocking", True) else None)
+    is_blocking = bool(announcement and announcement.get("blocking", True))
+    # Заштампуем started_at и для blocking, и для non-blocking — чтобы UI у всех клиентов
+    # одинаково видел момент старта.
+    stamped = await _set_runtime_announcement(session_id, announcement if is_blocking else None)
+    if announcement and not is_blocking:
+        stamped = _stamp_started_at(announcement)
+    if stamped is not None:
+        payload = {**payload, "announcement": stamped}
     if persist and db is not None and phase_id is not None:
         await _persist_phase_changed(db, session_id, phase_id, payload)
     log_event(
@@ -981,6 +1014,7 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
         saved_name=(saved_player.name if saved_player and healed_id is not None and healed_id not in final_death_ids else None),
         blocked_name=(blocked_player.name if blocked_player else None),
         )
+        first_morning = await _set_runtime_announcement(session.id, morning_steps[0]) if morning_steps else None
         db.add(
         GameEvent(
             id=uuid.uuid4(),
@@ -989,7 +1023,7 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
             event_type="night_result",
             payload={
                 **payload,
-                "announcement": morning_steps[0] if morning_steps else None,
+                "announcement": first_morning,
                 # Для восстановления runtime_state после рестарта.
                 "lover_last_target": str(rt.lover_last_target) if rt.lover_last_target else None,
                 "day_blocked_player": str(rt.day_blocked_player) if rt.day_blocked_player else None,
@@ -1010,7 +1044,7 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
 
         await ws_manager.send_to_session(
         session.id,
-        {"type": "night_result", "payload": {**payload, "announcement": morning_steps[0] if morning_steps else None}},
+        {"type": "night_result", "payload": {**payload, "announcement": first_morning}},
         )
         if died_players:
             await asyncio.gather(*(
@@ -1026,9 +1060,10 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
 
         if len(morning_steps) > 1:
             for announcement in morning_steps[1:]:
+                stamped = await _set_runtime_announcement(session.id, announcement)
                 await ws_manager.send_to_session(
                 session.id,
-                {"type": "night_result", "payload": {**payload, "announcement": announcement}},
+                {"type": "night_result", "payload": {**payload, "announcement": stamped}},
             )
                 await _wait_or_pause(session.id, (announcement.get("duration_ms") or 0) / 1000)
                 if rt.game_paused:
@@ -1330,6 +1365,7 @@ async def resolve_votes(session_id: uuid.UUID):
             ]
             if tied_ids and eliminated_id is None and rt.vote_round == 1:
                 tie_steps = vote_tie_steps(f"{session_id}:day:{phase.phase_number}:vote_tie")
+                tie_announcement = await _set_runtime_announcement(session_id, tie_steps[0])
                 db.add(
                     GameEvent(
                         id=uuid.uuid4(),
@@ -1341,7 +1377,7 @@ async def resolve_votes(session_id: uuid.UUID):
                             "votes": all_votes,
                             "tie": True,
                             "candidate_ids": [str(tid) for tid in tied_ids],
-                            "announcement": tie_steps[0],
+                            "announcement": tie_announcement,
                         },
                     )
                 )
@@ -1355,7 +1391,7 @@ async def resolve_votes(session_id: uuid.UUID):
                             "votes": all_votes,
                             "tie": True,
                             "candidate_ids": [str(tid) for tid in tied_ids],
-                            "announcement": tie_steps[0],
+                            "announcement": tie_announcement,
                         },
                     },
                 )
@@ -1388,6 +1424,7 @@ async def resolve_votes(session_id: uuid.UUID):
                 random_elimination=bool(rt.vote_round >= 2 and len(tied_ids) > 1 and eliminated_player),
                 unanimous_revote=bool(rt.vote_round >= 2 and len(tied_ids) <= 1 and eliminated_player),
             )
+            vote_announcement = await _set_runtime_announcement(session_id, vote_steps[0]) if vote_steps else None
             db.add(
                 GameEvent(
                     id=uuid.uuid4(),
@@ -1398,7 +1435,7 @@ async def resolve_votes(session_id: uuid.UUID):
                         "eliminated": str(eliminated_id) if eliminated_id else None,
                         "votes": all_votes,
                         "vote_round": rt.vote_round,
-                        "announcement": vote_steps[0] if vote_steps else None,
+                        "announcement": vote_announcement,
                     },
                 )
             )
@@ -1426,7 +1463,7 @@ async def resolve_votes(session_id: uuid.UUID):
                         ),
                         "votes": all_votes,
                         "vote_round": rt.vote_round,
-                        "announcement": vote_steps[0] if vote_steps else None,
+                        "announcement": vote_announcement,
                     },
                 },
             )
@@ -1595,6 +1632,14 @@ async def finish_game(
         winner=winner,
     )
 
+    finale_announcement = _stamp_started_at(
+        game_finished_steps(
+            f"{session.id}:finished:{winner}:{session.ended_at.isoformat() if session.ended_at else 'end'}",
+            winner=winner,
+            eliminated_name=eliminated_name,
+            before_voting=before_voting,
+        )[0]
+    )
     await ws_manager.send_to_session(
         session.id,
         {
@@ -1602,12 +1647,7 @@ async def finish_game(
             "payload": {
                 "winner": winner,
                 "players": payload_players,
-                "announcement": game_finished_steps(
-                    f"{session.id}:finished:{winner}:{session.ended_at.isoformat() if session.ended_at else 'end'}",
-                    winner=winner,
-                    eliminated_name=eliminated_name,
-                    before_voting=before_voting,
-                )[0],
+                "announcement": finale_announcement,
             },
         },
     )

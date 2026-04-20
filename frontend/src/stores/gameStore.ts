@@ -113,12 +113,14 @@ type ResultPayload = {
 interface GameState {
   screen: GameScreen;
   sessionId: string | null;
+  sessionCode: string | null;
   phase: Phase | null;
   nightNumber: number;
   dayNumber: number;
 
   // My player
   myPlayerId: string | null;
+  myPlayerName: string | null;
   myRole: Role | null;
   myStatus: 'alive' | 'dead';
   myIsBlockedTonight: boolean;
@@ -347,10 +349,12 @@ function isAnnouncementEnvelope(
 const initialState = {
   screen: 'role_reveal' as GameScreen,
   sessionId: null,
+  sessionCode: null,
   phase: null,
   nightNumber: 0,
   dayNumber: 0,
   myPlayerId: null,
+  myPlayerName: null,
   myRole: null,
   myStatus: 'alive' as const,
   myIsBlockedTonight: false,
@@ -408,9 +412,11 @@ export const useGameStore = create<GameState>((set, get) => ({
 
       return {
         sessionId,
+        sessionCode: data.session_code ?? state.sessionCode,
         phase,
         screen: applyAnnouncementScreen(screen, nextAnnouncement),
         myPlayerId: myPlayer?.id ?? null,
+        myPlayerName: myPlayer?.name ?? state.myPlayerName,
         myRole: myPlayer?.role ?? null,
         myStatus: myPlayer?.status ?? 'alive',
         myIsBlockedTonight: myPlayer?.is_blocked_tonight ?? false,

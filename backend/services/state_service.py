@@ -157,6 +157,15 @@ async def restore_runtime_like_fields(
         if announcement_event and isinstance(announcement_event.payload, dict):
             announcement = announcement_event.payload.get("announcement")
             announcement_started_at = announcement_event.created_at
+    # Если announcement не содержит started_at (старые записи или ручное создание) —
+    # подставим из created_at события, чтобы клиент мог синхронизировать typewriter.
+    if (
+        announcement
+        and isinstance(announcement, dict)
+        and not announcement.get("started_at")
+        and announcement_started_at is not None
+    ):
+        announcement = {**announcement, "started_at": announcement_started_at.isoformat()}
     if announcement and isinstance(announcement, dict) and rt.current_announcement is None:
         rt.current_announcement = announcement
         rt.announcement_started_at = announcement_started_at

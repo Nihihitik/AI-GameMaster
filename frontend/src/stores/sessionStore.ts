@@ -48,6 +48,7 @@ interface SessionState {
   removePlayer: (playerId: string) => void;
   setPlayers: (list: PlayerInList[]) => void;
   applySessionSettings: (settings: SessionSettings) => void;
+  applyHostTransfer: (newHostUserId: string, newHostPlayerId?: string | null) => void;
 
   // Local-only actions
   setWithStory: (value: boolean) => void;
@@ -221,6 +222,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   applySessionSettings: (settings) => {
     set({ settings });
+  },
+
+  applyHostTransfer: (newHostUserId, newHostPlayerId) => {
+    const currentUser = useAuthStore.getState().user;
+    set((state) => {
+      const nextSession = state.session
+        ? { ...state.session, host_user_id: newHostUserId }
+        : state.session;
+      // Пометить нового хоста, снять пометку со старого.
+      const nextPlayers = state.players.map((p) => {
+        const isNew = newHostPlayerId ? p.id === newHostPlayerId : false;
+        return { ...p, is_host: isNew };
+      });
+      return {
+        session: nextSession,
+        players: nextPlayers,
+        isHost: currentUser ? currentUser.user_id === newHostUserId : false,
+      };
+    });
   },
 
   setWithStory: (value) => {

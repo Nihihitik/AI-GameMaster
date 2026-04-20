@@ -3,17 +3,27 @@ import { useNavigate } from 'react-router-dom';
 import { useGameStore } from '../../stores/gameStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { gameApi } from '../../api/gameApi';
+import { sessionApi } from '../../api/sessionApi';
 import { getRoleInfo, CARD_BACK_IMAGE } from '../../utils/roles';
 import './FinaleScreen.scss';
+
+function getStatusFromError(err: unknown): number | null {
+  return (err as { response?: { status?: number } })?.response?.status ?? null;
+}
 
 export default function FinaleScreen() {
   const navigate = useNavigate();
   const result = useGameStore((s) => s.result);
   const sessionId = useGameStore((s) => s.sessionId);
+  const sessionCode = useGameStore((s) => s.sessionCode);
+  const myPlayerName = useGameStore((s) => s.myPlayerName);
   const resetGame = useGameStore((s) => s.reset);
   const resetSession = useSessionStore((s) => s.reset);
-  const isHost = useSessionStore((s) => s.isHost);
+  const fallbackCode = useSessionStore((s) => s.session?.code) ?? null;
+  const code = sessionCode ?? fallbackCode;
   const [resetting, setResetting] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!result) return null;
 
@@ -27,7 +37,18 @@ export default function FinaleScreen() {
       ? `Победа: ${winner}`
       : 'Ничья';
 
-  const handleGoHome = () => {
+  const handleGoHome = async () => {
+    if (leaving) return;
+    setLeaving(true);
+    setError(null);
+    // Покидаем сессию, чтобы backend передал роль хоста или удалил пустое лобби.
+    if (sessionId) {
+      try {
+        await sessionApi.leave(sessionId);
+      } catch {
+        // Игрок мог быть уже удалён сервером — игнорируем.
+      }
+    }
     resetGame();
     resetSession();
     navigate('/', { replace: true });
@@ -36,11 +57,36 @@ export default function FinaleScreen() {
   const handleBackToLobby = async () => {
     if (!sessionId || resetting) return;
     setResetting(true);
+    setError(null);
     try {
+      // Сценарий A: я первый — становлюсь хостом, сбрасываю сессию.
       const resp = await gameApi.resetToLobby(sessionId);
       resetGame();
-      navigate(`/lobby/${resp.data.session_code}`, { replace: true });
-    } catch {
+      navigate(`/sessions/${resp.data.session_code}`, { replace: true });
+      return;
+    } catch (err) {
+      // 403 not_in_session = другой игрок уже сбросил сессию и я был удалён из players.
+      // Делаем join по коду — это вернёт меня в новое лобби как обычного игрока.
+      if (getStatusFromError(err) === 403 && code) {
+        try {
+          const name = (myPlayerName && myPlayerName.trim()) || 'Игрок';
+          await sessionApi.join(code, { name });
+          resetGame();
+          navigate(`/sessions/${code}`, { replace: true });
+          return;
+        } catch (joinErr) {
+          const joinMessage =
+            (joinErr as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+            'Не удалось присоединиться к лобби. Возможно, оно уже закрыто.';
+          setError(joinMessage);
+          setResetting(false);
+          return;
+        }
+      }
+      const message =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+        'Не удалось вернуться в лобби. Проверьте соединение и попробуйте снова.';
+      setError(message);
       setResetting(false);
     }
   };
@@ -110,17 +156,20 @@ export default function FinaleScreen() {
         </div>
 
         <div className="finale__actions">
-          {isHost && (
-            <button
-              className="finale__lobby-btn"
-              onClick={handleBackToLobby}
-              disabled={resetting}
-            >
-              {resetting ? 'Возврат...' : 'Вернуться в лобби'}
-            </button>
-          )}
-          <button className="finale__home-btn" onClick={handleGoHome}>
-            На главную
+          {error && <div className="finale__error">{error}</div>}
+          <button
+            className="finale__lobby-btn"
+            onClick={handleBackToLobby}
+            disabled={resetting || leaving}
+          >
+            {resetting ? 'Возврат...' : 'Вернуться в лобби'}
+          </button>
+          <button
+            className="finale__home-btn"
+            onClick={handleGoHome}
+            disabled={leaving || resetting}
+          >
+            {leaving ? 'Выход...' : 'На главную'}
           </button>
         </div>
       </div>

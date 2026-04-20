@@ -18,6 +18,7 @@ from models.player import Player
 from models.session import Session
 from schemas.session import PlayerInList, UpdateSettingsRequest
 from services.game_engine import apply_host_kick
+from services.lobby_service import handle_player_left
 from services.pause_service import pause_game, resume_game
 from services.session_service import validate_role_config
 from services.timer_service import timer_service
@@ -58,13 +59,39 @@ async def leave_lobby(
     db: AsyncSession = Depends(get_db),
 ):
     session = await get_session_or_404(db, session_id)
-    if session.status != "waiting":
+    # Активной игры покидать нельзя (действие во время игры — отдельный flow с кик/выбыванием),
+    # но из `waiting` и `finished` (после финала) — можно.
+    if session.status == "active":
         raise GameError(409, "game_already_started", "Игра уже началась")
 
     player = await get_player_or_404(db, session_id, current_user.id)
 
     pid = player.id
+    leaver_user_id = current_user.id
     await db.delete(player)
+
+    # handle_player_left делает commit; при удалении сессии срабатывает CASCADE,
+    # поэтому GameEvent `player_left` создаём ПОСЛЕ того, как убедились, что сессия
+    # продолжает существовать.
+    outcome = await handle_player_left(db, session, leaver_user_id)
+
+    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
+    log_event(
+        logger,
+        logging.INFO,
+        "session.left",
+        "Player left lobby",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+        player_id=str(pid),
+        session_deleted=outcome.session_deleted,
+        host_transferred=outcome.host_transferred,
+    )
+
+    if outcome.session_deleted:
+        await ws_manager.close_session(session_id)
+        return None
+
     db.add(
         GameEvent(
             id=uuid.uuid4(),
@@ -75,18 +102,23 @@ async def leave_lobby(
         )
     )
     await db.commit()
-    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
-    log_event(
-        logger,
-        logging.INFO,
-        "session.left",
-        "Player left lobby",
-        session_id=str(session_id),
-        user_id=str(current_user.id),
-        player_id=str(pid),
-    )
 
-    await ws_manager.send_to_session(session_id, {"type": "player_left", "payload": {"player_id": str(pid)}})
+    await ws_manager.send_to_session(
+        session_id, {"type": "player_left", "payload": {"player_id": str(pid)}}
+    )
+    if outcome.host_transferred:
+        await ws_manager.send_to_session(
+            session_id,
+            {
+                "type": "host_transferred",
+                "payload": {
+                    "new_host_user_id": str(outcome.new_host_user_id),
+                    "new_host_player_id": str(outcome.new_host_player_id),
+                    "new_host_name": outcome.new_host_name,
+                    "previous_host_user_id": str(leaver_user_id),
+                },
+            },
+        )
     return None
 
 

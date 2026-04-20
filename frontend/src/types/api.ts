@@ -152,6 +152,7 @@ export type ActionType =
 
 export interface GameStateResponse {
   session_status: 'active' | 'finished';
+  session_code?: string;
   game_paused: boolean;
   phase: Phase;
   announcement?: GameResult['announcement'] | null;

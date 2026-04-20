@@ -1,40 +1,94 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
 import './NarratorScreen.scss';
+
+const CHAR_INTERVAL_MS = 45;
+const TICK_INTERVAL_MS = 45;
+
+function getStartedAtMs(startedAtIso?: string): number | null {
+  if (!startedAtIso) return null;
+  const ts = Date.parse(startedAtIso);
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function computeDisplayedChars(textLen: number, startedAtMs: number | null, now: number): number {
+  if (textLen <= 0) return 0;
+  if (startedAtMs === null) {
+    // Нет server-time — fallback на «начать с 0 при mount».
+    return 0;
+  }
+  const elapsedMs = Math.max(0, now - startedAtMs);
+  return Math.min(textLen, Math.floor(elapsedMs / CHAR_INTERVAL_MS));
+}
+
+function computeProgress(durationMs: number | undefined, startedAtMs: number | null, textLen: number, displayedChars: number, now: number): number {
+  if (startedAtMs !== null && durationMs && durationMs > 0) {
+    const elapsedMs = Math.max(0, now - startedAtMs);
+    return Math.min(100, (elapsedMs / durationMs) * 100);
+  }
+  if (textLen <= 0) return 0;
+  return Math.min(100, (displayedChars / textLen) * 100);
+}
 
 export default function NarratorScreen() {
   const announcement = useGameStore((s) => s.currentAnnouncement);
   const currentText = announcement?.text ?? '';
   const announcementKey = announcement?.key ?? currentText;
-  const [displayedChars, setDisplayedChars] = useState(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startedAtMs = getStartedAtMs(announcement?.started_at);
+  const durationMs = announcement?.duration_ms;
 
+  // Сразу при mount/смене announcement — догоняем то место, где должен быть typewriter
+  // согласно server-time. Это синхронизирует разные клиенты и refresh-нутые вкладки.
+  const [displayedChars, setDisplayedChars] = useState(() =>
+    computeDisplayedChars(currentText.length, startedAtMs, Date.now())
+  );
+  const [progress, setProgress] = useState(() =>
+    computeProgress(
+      durationMs,
+      startedAtMs,
+      currentText.length,
+      computeDisplayedChars(currentText.length, startedAtMs, Date.now()),
+      Date.now(),
+    )
+  );
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // При смене announcement пересчитать «откуда продолжать».
   useEffect(() => {
-    setDisplayedChars(0);
+    const next = computeDisplayedChars(currentText.length, startedAtMs, Date.now());
+    setDisplayedChars(next);
+    setProgress(computeProgress(durationMs, startedAtMs, currentText.length, next, Date.now()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [announcementKey]);
 
   useEffect(() => {
-    if (!currentText) return;
-    if (displayedChars >= currentText.length) {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      return;
-    }
+    if (!currentText) return undefined;
 
-    intervalRef.current = setInterval(() => {
-      setDisplayedChars((prev) => (prev >= currentText.length ? prev : prev + 1));
-    }, 45);
+    const tick = () => {
+      const now = Date.now();
+      const nextChars = computeDisplayedChars(currentText.length, startedAtMs, now);
+      setDisplayedChars((prev) => (nextChars > prev ? nextChars : prev));
+      setProgress(computeProgress(durationMs, startedAtMs, currentText.length, nextChars, now));
+      const allDone =
+        nextChars >= currentText.length &&
+        (!startedAtMs || !durationMs || now - startedAtMs >= durationMs);
+      if (allDone && tickRef.current) {
+        clearInterval(tickRef.current);
+        tickRef.current = null;
+      }
+    };
+
+    tickRef.current = setInterval(tick, TICK_INTERVAL_MS);
+    // Первый tick сразу — без ожидания interval'а.
+    tick();
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (tickRef.current) {
+        clearInterval(tickRef.current);
+        tickRef.current = null;
+      }
     };
-  }, [announcementKey, currentText, displayedChars]);
-
-  const progress = useMemo(() => {
-    if (!announcement?.duration_ms || !currentText.length) {
-      return (displayedChars / Math.max(1, currentText.length)) * 100;
-    }
-    return Math.min(100, (displayedChars / Math.max(1, currentText.length)) * 100);
-  }, [announcement?.duration_ms, currentText.length, displayedChars]);
+  }, [announcementKey, currentText, startedAtMs, durationMs]);
 
   return (
     <div className="narrator-screen">

@@ -39,6 +39,9 @@ export interface Announcement {
   steps_total?: number;
   blocking?: boolean;
   seed?: number;
+  // ISO8601, момент когда сервер начал «озвучивать» — нужен для синхронизации
+  // typewriter/прогресс-бара между клиентами и при reload/перезаходе на страницу.
+  started_at?: string;
 }
 
 export interface MyPlayer {
