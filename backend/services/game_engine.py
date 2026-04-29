@@ -165,6 +165,21 @@ def _gender_for_name(display_name: str | None) -> str | None:
     return n.gender if n else None
 
 
+# Запас в мс на каждую реплику, чтобы аудио не обрезалось на стыке.
+# Длительности в audio_manifest.json берутся из круглых скобок имени файла
+# (`(8)` → 8000), но реальный mp3 обычно на 100–500мс длиннее.  Без буфера
+# backend сносит announcement до окончания аудио — слышно как фраза
+# обрывается на середине последнего слова.
+_ANNOUNCEMENT_GRACE_MS = 500
+
+
+def _wait_seconds_for(announcement: dict | None) -> float:
+    duration_ms = (announcement or {}).get("duration_ms") or 0
+    if duration_ms <= 0:
+        return 0.0
+    return (duration_ms + _ANNOUNCEMENT_GRACE_MS) / 1000
+
+
 async def _play_phase_announcements(
     session_id: uuid.UUID,
     phase_payload: dict,
@@ -189,7 +204,7 @@ async def _play_phase_announcements(
             phase_id=phase_id,
             persist=persist and db is not None and phase_id is not None,
         )
-        await _wait_or_pause(session_id, (announcement.get("duration_ms") or 0) / 1000)
+        await _wait_or_pause(session_id, _wait_seconds_for(announcement))
     await _set_runtime_announcement(session_id, None)
 
 
@@ -1088,11 +1103,11 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
                 session.id,
                 {"type": "night_result", "payload": {**payload, "announcement": stamped}},
             )
-                await _wait_or_pause(session.id, (announcement.get("duration_ms") or 0) / 1000)
+                await _wait_or_pause(session.id, _wait_seconds_for(announcement))
                 if rt.game_paused:
                     return
         else:
-            await _wait_or_pause(session.id, ((morning_steps[0].get("duration_ms") or 0) / 1000) if morning_steps else 0)
+            await _wait_or_pause(session.id, _wait_seconds_for(morning_steps[0]) if morning_steps else 0)
 
         winner = await check_win_condition(db, session.id)
         if winner:
@@ -1419,7 +1434,7 @@ async def resolve_votes(session_id: uuid.UUID):
                         },
                     },
                 )
-                await _wait_or_pause(session_id, (tie_steps[0].get("duration_ms") or 0) / 1000)
+                await _wait_or_pause(session_id, _wait_seconds_for(tie_steps[0]))
                 await db.execute(delete(DayVote).where(DayVote.phase_id == phase.id))
                 await db.commit()
                 await transition_to_voting(
@@ -1525,7 +1540,7 @@ async def resolve_votes(session_id: uuid.UUID):
             )
 
             if vote_steps:
-                await _wait_or_pause(session_id, (vote_steps[0].get("duration_ms") or 0) / 1000)
+                await _wait_or_pause(session_id, _wait_seconds_for(vote_steps[0]))
 
             await transition_to_night(session_id, phase.phase_number + 1)
     finally:

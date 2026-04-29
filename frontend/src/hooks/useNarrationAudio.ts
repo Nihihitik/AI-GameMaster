@@ -82,6 +82,10 @@ export function useNarrationAudio(announcement: Announcement | null) {
     // должно видеть актуальное значение между переключениями src.
     let currentIndex = activeIndex;
     let cancelled = false;
+    // Ссылка на функцию-снятие висящих listener'ов жеста (autoplay retry).
+    // Если announcement сменится до того, как пользователь кликнет —
+    // надо не оставлять зомби-listener'ов на document.
+    let gestureCleanupRef: (() => void) | null = null;
 
     const playFrom = (idx: number, offsetMs: number) => {
       if (cancelled) return;
@@ -101,10 +105,33 @@ export function useNarrationAudio(announcement: Announcement | null) {
         const playPromise = audio.play();
         if (playPromise && typeof playPromise.catch === 'function') {
           playPromise.catch((err) => {
-            // Браузерный autoplay-policy может потребовать жест пользователя.
-            // На /lobby пользователь уже жал кнопки → к игре жест есть.
-            // В крайнем случае молча отключаемся — typewriter останется.
-            console.warn('[narration audio] play() rejected:', err);
+            // Браузерный autoplay-policy блокирует play() без user-gesture.
+            // Это случается когда игрок открывает dev-ссылку в новой вкладке —
+            // взаимодействия ещё не было.  Решение: ждём первого жеста и
+            // ретраим play(). Audio.currentTime сохраняется, поэтому реплика
+            // подхватится с актуальной позиции согласно server-time.
+            console.warn('[narration audio] play() rejected, awaiting user gesture:', err);
+            const retry = () => {
+              cleanupGesture();
+              if (cancelled) return;
+              const p = audio.play();
+              if (p && typeof p.catch === 'function') {
+                p.catch((retryErr) => {
+                  console.warn('[narration audio] retry after gesture failed:', retryErr);
+                });
+              }
+            };
+            const cleanupGesture = () => {
+              document.removeEventListener('click', retry);
+              document.removeEventListener('keydown', retry);
+              document.removeEventListener('touchstart', retry);
+              document.removeEventListener('pointerdown', retry);
+            };
+            document.addEventListener('click', retry, { once: true });
+            document.addEventListener('keydown', retry, { once: true });
+            document.addEventListener('touchstart', retry, { once: true });
+            document.addEventListener('pointerdown', retry, { once: true });
+            gestureCleanupRef = cleanupGesture;
           });
         }
       };
@@ -140,6 +167,10 @@ export function useNarrationAudio(announcement: Announcement | null) {
 
     return () => {
       cancelled = true;
+      if (gestureCleanupRef) {
+        gestureCleanupRef();
+        gestureCleanupRef = null;
+      }
       audio.removeEventListener('ended', onEnded);
       try {
         audio.pause();
