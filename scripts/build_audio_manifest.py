@@ -345,9 +345,11 @@ def parse_file(path: Path, audio_subdir: str, text_override: str | None = None) 
     # 2. Name-pair?
     pair = _try_match_name_pair(stem_n)
     if pair:
-        action_key, role, gender, pid, dur_ms, _text_lower = pair
-        if dur_ms == 0:
-            dur_ms = _read_real_duration_ms(path)
+        action_key, role, gender, pid, _dur_from_name, _text_lower = pair
+        # Длительность всегда читаем из mp3 через mutagen — `(N)` в имени
+        # округляется вниз и ошибается на 0.5–3.5 секунды, из-за чего фронт
+        # обрезает аудио на стыке announcement'ов.
+        dur_ms = _read_real_duration_ms(path)
         text = _extract_text_preserving_case(stem_orig_norm)
         text = re.sub(r"^продолжение после id\s+", "", text, flags=re.IGNORECASE).strip(" .")
         return {
@@ -376,7 +378,9 @@ def parse_file(path: Path, audio_subdir: str, text_override: str | None = None) 
         if not has_text_in_name and not has_override:
             print(f"[skip] {path.name}: нет текста после (N) и нет override, пропускаю variant")
             return None
-        dur_ms = dur_filename or _read_real_duration_ms(path)
+        # Длительность всегда из mutagen — `(N)` в имени округляется вниз
+        # с погрешностью 0.5–3.5 сек, и backend бы обрывал аудио на стыке.
+        dur_ms = _read_real_duration_ms(path)
         text = _extract_text_preserving_case(stem_orig_norm) if has_text_in_name else ""
         return {
             "kind": "variant",

@@ -165,12 +165,11 @@ def _gender_for_name(display_name: str | None) -> str | None:
     return n.gender if n else None
 
 
-# Запас в мс на каждую реплику, чтобы аудио не обрезалось на стыке.
-# Длительности в audio_manifest.json берутся из круглых скобок имени файла
-# (`(8)` → 8000), но реальный mp3 обычно на 100–500мс длиннее.  Без буфера
-# backend сносит announcement до окончания аудио — слышно как фраза
-# обрывается на середине последнего слова.
-_ANNOUNCEMENT_GRACE_MS = 500
+# Запас в мс на каждую реплику. Длительности в audio_manifest.json
+# теперь точные — читаются из mp3 через mutagen в build_audio_manifest.py,
+# а не из `(N)` в имени. Поэтому grace нужен только как safety margin
+# на сетевую задержку WebSocket'а между backend → frontend.
+_ANNOUNCEMENT_GRACE_MS = 150
 
 
 def _wait_seconds_for(announcement: dict | None) -> float:

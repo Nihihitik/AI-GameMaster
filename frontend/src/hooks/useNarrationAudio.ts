@@ -18,6 +18,9 @@ import type { Announcement, AudioSegment } from '../types/game';
 export function useNarrationAudio(announcement: Announcement | null) {
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState(-1);
   const [currentFileName, setCurrentFileName] = useState<string | null>(null);
+  // true пока браузер блокирует autoplay и мы ждём первого жеста пользователя.
+  // Используется в UI чтобы показать prompt «Нажмите чтобы включить озвучку».
+  const [needsGesture, setNeedsGesture] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const muted = useAudioStore((s) => s.muted);
   const volume = useAudioStore((s) => s.volume);
@@ -45,6 +48,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
     }
     setCurrentSegmentIndex(-1);
     setCurrentFileName(null);
+    setNeedsGesture(false);
 
     if (!announcement) return;
     const segments = resolveSegments(announcement);
@@ -105,12 +109,22 @@ export function useNarrationAudio(announcement: Announcement | null) {
         const playPromise = audio.play();
         if (playPromise && typeof playPromise.catch === 'function') {
           playPromise.catch((err) => {
+            // Если announcement уже сменился (effect cleanup отработал) —
+            // не вешаем listener'ы, иначе они окажутся «зомби» на document.
+            if (cancelled) return;
             // Браузерный autoplay-policy блокирует play() без user-gesture.
             // Это случается когда игрок открывает dev-ссылку в новой вкладке —
             // взаимодействия ещё не было.  Решение: ждём первого жеста и
             // ретраим play(). Audio.currentTime сохраняется, поэтому реплика
             // подхватится с актуальной позиции согласно server-time.
             console.warn('[narration audio] play() rejected, awaiting user gesture:', err);
+            setNeedsGesture(true);
+            const cleanupGesture = () => {
+              document.removeEventListener('click', retry);
+              document.removeEventListener('keydown', retry);
+              document.removeEventListener('touchstart', retry);
+              document.removeEventListener('pointerdown', retry);
+            };
             const retry = () => {
               cleanupGesture();
               if (cancelled) return;
@@ -120,12 +134,9 @@ export function useNarrationAudio(announcement: Announcement | null) {
                   console.warn('[narration audio] retry after gesture failed:', retryErr);
                 });
               }
-            };
-            const cleanupGesture = () => {
-              document.removeEventListener('click', retry);
-              document.removeEventListener('keydown', retry);
-              document.removeEventListener('touchstart', retry);
-              document.removeEventListener('pointerdown', retry);
+              // Жест был — снимаем prompt, даже если retry упал
+              // (повторно prompt не поможет, нужно решать на стороне браузера).
+              setNeedsGesture(false);
             };
             document.addEventListener('click', retry, { once: true });
             document.addEventListener('keydown', retry, { once: true });
@@ -186,6 +197,7 @@ export function useNarrationAudio(announcement: Announcement | null) {
   return {
     currentSegmentIndex,
     currentFileName,
+    needsGesture,
   };
 }
 

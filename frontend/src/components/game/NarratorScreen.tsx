@@ -47,7 +47,7 @@ function computeProgress(durationMs: number | undefined, startedAtMs: number | n
 
 export default function NarratorScreen() {
   const announcement = useGameStore((s) => s.currentAnnouncement);
-  const { currentFileName } = useNarrationAudio(announcement);
+  const { needsGesture } = useNarrationAudio(announcement);
   const currentText = announcement?.text ?? '';
   const announcementKey = announcement?.key ?? currentText;
   const startedAtMs = getStartedAtMs(announcement?.started_at);
@@ -142,13 +142,25 @@ export default function NarratorScreen() {
             {announcement.step_index ?? 1} / {announcement.steps_total}
           </div>
         )}
-
-        {process.env.NODE_ENV === 'development' && (currentFileName || announcement?.audio_file_name) && (
-          <div className="narrator-screen__file" title="dev-only">
-            {currentFileName ?? announcement?.audio_file_name}
-          </div>
-        )}
       </div>
+
+      {needsGesture && (
+        <button
+          type="button"
+          className="narrator-screen__gesture-prompt"
+          onClick={() => {
+            /* любой жест ловится глобальным listener'ом — клик по этой кнопке тоже */
+          }}
+          aria-label="Включить озвучку"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <path d="M11 5L6 9H2v6h4l5 4V5z" />
+            <path d="M19 12c0-2.5-1.5-4.5-3-5.5" />
+            <path d="M22 12c0-4-2.5-7-5-8.5" />
+          </svg>
+          <span>Нажмите чтобы включить озвучку</span>
+        </button>
+      )}
     </div>
   );
 }

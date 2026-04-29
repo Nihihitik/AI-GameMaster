@@ -182,9 +182,14 @@ function VariantControls({
   onPlay: (a: Announcement) => void;
   onStop: () => void;
 }) {
-  const playRandom = () => {
+  // -1 = «случайный» (как в реальной игре). 0..N-1 — конкретный вариант.
+  const [selectedIdx, setSelectedIdx] = useState<number>(-1);
+
+  const play = () => {
     if (variants.length === 0) return;
-    const idx = Math.floor(Math.random() * variants.length);
+    const idx = selectedIdx >= 0 && selectedIdx < variants.length
+      ? selectedIdx
+      : Math.floor(Math.random() * variants.length);
     const v = variants[idx];
     onPlay({
       key: `preview:${trigger}:${idx}:${Date.now()}`,
@@ -200,15 +205,37 @@ function VariantControls({
 
   return (
     <div className="narrator-preview__btn-group">
+      {variants.length > 1 && (
+        <label className="narrator-preview__name-field">
+          <span>Реплика</span>
+          <select
+            value={selectedIdx}
+            onChange={(e) => setSelectedIdx(Number(e.target.value))}
+            disabled={playing}
+          >
+            <option value={-1}>Случайная (как в игре)</option>
+            {variants.map((v, i) => (
+              <option key={v.file_name} value={i}>
+                {i + 1}. {truncate(v.text, 60) || v.file_name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <button
         className={`narrator-preview__play-btn${playing ? ' narrator-preview__play-btn--stop' : ''}`}
-        onClick={playing ? onStop : playRandom}
+        onClick={playing ? onStop : play}
         type="button"
       >
         {playing ? '■ Стоп' : '▶ Сыграть'}
       </button>
     </div>
   );
+}
+
+function truncate(s: string, n: number): string {
+  if (!s) return '';
+  return s.length <= n ? s : s.slice(0, n - 1) + '…';
 }
 
 function PairControls({
@@ -225,6 +252,8 @@ function PairControls({
   onStop: () => void;
 }) {
   const [selectedName, setSelectedName] = useState(MANIFEST.names[0]?.display ?? '');
+  // -1 = «случайная пара» (как в реальной игре). Иначе индекс в candidatePairs.
+  const [selectedPairIdx, setSelectedPairIdx] = useState<number>(-1);
   const nameInfo = useMemo(
     () => MANIFEST.names.find((n) => n.display === selectedName) ?? null,
     [selectedName],
@@ -236,9 +265,17 @@ function PairControls({
     return matched.length > 0 ? matched : pairs;
   }, [pairs, targetGender]);
 
-  const playRandom = () => {
+  // При смене имени/пола набор подходящих пар меняется — сбрасываем выбор.
+  useEffect(() => {
+    setSelectedPairIdx(-1);
+  }, [targetGender]);
+
+  const play = () => {
     if (!nameInfo || candidatePairs.length === 0) return;
-    const pair = candidatePairs[Math.floor(Math.random() * candidatePairs.length)];
+    const idx = selectedPairIdx >= 0 && selectedPairIdx < candidatePairs.length
+      ? selectedPairIdx
+      : Math.floor(Math.random() * candidatePairs.length);
+    const pair = candidatePairs[idx];
     const segments = [
       { url: pair.opener.audio_url, duration_ms: pair.opener.duration_ms },
       { url: nameInfo.intro_audio, duration_ms: nameInfo.intro_duration_ms },
@@ -275,9 +312,26 @@ function PairControls({
           ))}
         </select>
       </label>
+      {candidatePairs.length > 1 && (
+        <label className="narrator-preview__name-field">
+          <span>Пара</span>
+          <select
+            value={selectedPairIdx}
+            onChange={(e) => setSelectedPairIdx(Number(e.target.value))}
+            disabled={playing}
+          >
+            <option value={-1}>Случайная (как в игре)</option>
+            {candidatePairs.map((p, i) => (
+              <option key={`${p.gender}-${p.id}`} value={i}>
+                #{p.id} {p.gender !== 'any' ? `(${p.gender === 'f' ? 'ж' : 'м'}) ` : ''}— {truncate(p.opener.text, 50)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <button
         className={`narrator-preview__play-btn${playing ? ' narrator-preview__play-btn--stop' : ''}`}
-        onClick={playing ? onStop : playRandom}
+        onClick={playing ? onStop : play}
         type="button"
       >
         {playing ? '■ Стоп' : '▶ Сыграть склейку'}
