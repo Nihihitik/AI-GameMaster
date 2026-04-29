@@ -101,7 +101,7 @@ export default function GamePage() {
   // Load game state + open WebSocket on mount.
   useEffect(() => {
     if (!sessionId) {
-      navigate('/', { replace: true });
+      navigate('/app', { replace: true });
       return;
     }
 
@@ -118,7 +118,7 @@ export default function GamePage() {
         if (afterLoad.screen === 'finale' && !afterLoad.result) {
           useGameStore.getState().reset();
           useSessionStore.getState().reset();
-          navigate('/', { replace: true });
+          navigate('/app', { replace: true });
           return;
         }
         wsClient.connect(sessionId);
@@ -191,7 +191,7 @@ export default function GamePage() {
     return (
       <div className="game-error">
         <p>{loadError || 'Не удалось загрузить игру'}</p>
-        <Button onClick={() => navigate('/', { replace: true })}>На главную</Button>
+        <Button onClick={() => navigate('/app', { replace: true })}>На главную</Button>
       </div>
     );
   }

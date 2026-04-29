@@ -61,7 +61,7 @@ export default function FinaleScreen() {
     }
     resetGame();
     resetSession();
-    navigate('/', { replace: true });
+    navigate('/app', { replace: true });
   };
 
   const handleBackToLobby = async () => {

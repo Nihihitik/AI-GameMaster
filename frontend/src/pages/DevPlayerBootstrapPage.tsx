@@ -17,7 +17,7 @@ export default function DevPlayerBootstrapPage() {
 
   useEffect(() => {
     if (!code || !playerSlug) {
-      navigate('/', { replace: true });
+      navigate('/app', { replace: true });
       return;
     }
 
@@ -64,7 +64,7 @@ export default function DevPlayerBootstrapPage() {
     return (
       <div className="game-error">
         <p>{error}</p>
-        <Button onClick={() => navigate('/', { replace: true })}>На главную</Button>
+        <Button onClick={() => navigate('/app', { replace: true })}>На главную</Button>
       </div>
     );
   }

@@ -163,7 +163,7 @@ export default function StorySelectionPage() {
     if (session?.id) {
       navigate(`/game/${session.id}`);
     } else {
-      navigate('/', { replace: true });
+      navigate('/app', { replace: true });
     }
   };
 

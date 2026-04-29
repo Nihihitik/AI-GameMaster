@@ -105,7 +105,7 @@ export default function LobbyPage() {
   // Load session + open WebSocket on mount; tear down on unmount.
   useEffect(() => {
     if (!code) {
-      navigate('/', { replace: true });
+      navigate('/app', { replace: true });
       return;
     }
 
@@ -124,7 +124,7 @@ export default function LobbyPage() {
         if (loaded && !myId) {
           // Игрок не найден в сессии — вероятно, вышел из лобби в другом браузере.
           useSessionStore.getState().reset();
-          navigate('/', { replace: true });
+          navigate('/app', { replace: true });
           return;
         }
         if (loaded) {
@@ -257,7 +257,7 @@ export default function LobbyPage() {
     return (
       <div className="lobby-page lobby-page--error">
         <p>{loadError || 'Сессия не найдена'}</p>
-        <Button onClick={() => navigate('/', { replace: true })}>На главную</Button>
+        <Button onClick={() => navigate('/app', { replace: true })}>На главную</Button>
       </div>
     );
   }
@@ -276,7 +276,7 @@ export default function LobbyPage() {
       )}
       <PageHeader
         title="Лобби"
-        onBack={() => navigate('/')}
+        onBack={() => navigate('/app')}
         rightSlot={
           isHost ? (
             <IconButton

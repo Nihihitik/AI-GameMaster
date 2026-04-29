@@ -1,0 +1,17 @@
+.scroll-reveal {
+  margin: 0;
+  display: block;
+
+  .scroll-reveal-text {
+    margin: 0;
+    line-height: 1.5;
+    color: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+  }
+
+  .scroll-reveal-word {
+    display: inline-block;
+    will-change: opacity, filter;
+  }
+}

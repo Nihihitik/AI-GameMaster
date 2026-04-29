@@ -1,0 +1,633 @@
+$ml-bg: #060606;
+$ml-bg-2: #0a0a0a;
+$ml-surface: #111111;
+$ml-surface-2: #161616;
+$ml-border: rgba(255, 255, 255, 0.08);
+$ml-border-strong: rgba(255, 255, 255, 0.14);
+$ml-text: #ffffff;
+$ml-muted: rgba(255, 255, 255, 0.62);
+$ml-faint: rgba(255, 255, 255, 0.42);
+$ml-red: #c81e1e;
+$ml-red-2: #ff3333;
+$ml-red-3: #ff4444;
+$ml-red-deep: #8b0000;
+
+.pricing-page {
+  background: $ml-bg;
+  color: $ml-text;
+  font-family: 'Inter', 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  overflow-x: hidden;
+
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+}
+
+// minimalist red CTA mixin — без шиммера, плотный фирменный красный
+@mixin ml-shimmer-btn {
+  position: relative;
+  color: #fff;
+  background: #c81e1e;
+  border: 1px solid rgba(255, 90, 90, 0.35);
+  box-shadow:
+    0 6px 18px rgba(200, 30, 30, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transition: transform 0.25s ease, background 0.25s ease, box-shadow 0.3s ease, border-color 0.25s ease;
+
+  &:hover {
+    transform: translateY(-2px);
+    background: #d92828;
+    border-color: rgba(255, 120, 120, 0.5);
+    box-shadow:
+      0 8px 22px rgba(200, 30, 30, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  }
+
+  &:active {
+    transform: translateY(0);
+    background: #a51616;
+  }
+}
+
+// ─── Nav (matches .landing-nav: floating glass pill) ────────────────────
+.pricing-nav {
+  position: relative;
+  z-index: 50;
+  width: 100%;
+  margin: 16px auto 0;
+  max-width: calc(1280px + 32px);
+  padding: 0 16px;
+  background: transparent;
+  border: none;
+
+  &__inner {
+    border-radius: 999px;
+    padding: 12px 18px 12px 22px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: rgba(14, 8, 8, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    box-shadow:
+      0 8px 30px rgba(0, 0, 0, 0.45),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      inset 0 -1px 0 rgba(255, 51, 51, 0.08);
+
+    @media (max-width: 768px) {
+      padding: 10px 12px 10px 16px;
+      gap: 12px;
+    }
+  }
+
+  &__logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 800;
+    font-size: 17px;
+    letter-spacing: -0.01em;
+    color: $ml-text;
+    text-decoration: none;
+    flex-shrink: 0;
+  }
+
+  &__logo-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: $ml-red-2;
+    box-shadow: 0 0 14px $ml-red-2;
+  }
+
+  &__actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  &__back {
+    color: $ml-muted;
+    font-size: 14px;
+    text-decoration: none;
+    transition: color 0.2s ease;
+
+    &:hover {
+      color: $ml-text;
+    }
+  }
+
+  // ── Стеклянная primary-кнопка (полная копия landing-btn--primary --small).
+  &__cta {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-family: inherit;
+    font-weight: 700;
+    font-size: 13.5px;
+    letter-spacing: 0.01em;
+    padding: 10px 18px;
+    border-radius: 999px;
+    cursor: pointer;
+    color: #fff;
+    background: rgba(200, 30, 30, 0.55);
+    border: 1px solid rgba(255, 90, 90, 0.35);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    box-shadow:
+      0 6px 18px rgba(200, 30, 30, 0.20),
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      inset 0 -1px 0 rgba(255, 51, 51, 0.10);
+    transition: transform 0.25s ease, background 0.3s ease, border-color 0.3s ease, box-shadow 0.35s ease;
+
+    &:hover {
+      transform: translateY(-2px);
+      background: rgba(217, 40, 40, 0.65);
+      border-color: rgba(255, 120, 120, 0.5);
+      box-shadow:
+        0 8px 22px rgba(200, 30, 30, 0.30),
+        inset 0 1px 0 rgba(255, 255, 255, 0.20),
+        inset 0 -1px 0 rgba(255, 51, 51, 0.18);
+    }
+
+    &:active {
+      transform: translateY(0);
+      background: rgba(165, 22, 22, 0.7);
+    }
+  }
+}
+
+// ─── Header ──────────────────────────────────────────────────────────────
+.pricing-header {
+  position: relative;
+  padding: 100px 24px 60px;
+  text-align: center;
+  overflow: hidden;
+
+  &__bg {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  &__orb {
+    position: absolute;
+    width: 720px;
+    height: 720px;
+    left: 50%;
+    top: -200px;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: radial-gradient(circle, $ml-red 0%, transparent 60%);
+    filter: blur(120px);
+    opacity: 0.35;
+  }
+
+  &__inner {
+    position: relative;
+    z-index: 1;
+    max-width: 760px;
+    margin: 0 auto;
+  }
+
+  &__kicker {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: $ml-red-2;
+    padding: 6px 14px;
+    border: 1px solid rgba(255, 51, 51, 0.3);
+    border-radius: 999px;
+    background: rgba(200, 30, 30, 0.08);
+    margin-bottom: 24px;
+  }
+
+  &__title {
+    font-size: clamp(36px, 6vw, 68px);
+    line-height: 1.05;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    margin: 0 0 20px;
+
+    &-accent {
+      background: linear-gradient(135deg, $ml-red-2 0%, $ml-red-deep 80%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+  }
+
+  &__sub {
+    color: $ml-muted;
+    font-size: clamp(15px, 1.4vw, 18px);
+    line-height: 1.6;
+    margin: 0 0 36px;
+  }
+}
+
+// ─── Period toggle ───────────────────────────────────────────────────────
+.pricing-toggle {
+  display: inline-flex;
+  background: $ml-surface;
+  border: 1px solid $ml-border-strong;
+  border-radius: 999px;
+  padding: 4px;
+  gap: 4px;
+
+  &__btn {
+    border: none;
+    background: none;
+    color: $ml-muted;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 10px 22px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.25s ease, color 0.25s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+
+    &--active {
+      background: $ml-text;
+      color: $ml-bg;
+    }
+  }
+
+  &__save {
+    background: rgba(255, 51, 51, 0.18);
+    color: $ml-red-2;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 999px;
+
+    .pricing-toggle__btn--active & {
+      background: rgba(0, 0, 0, 0.15);
+      color: $ml-bg;
+    }
+  }
+}
+
+// ─── Plans ───────────────────────────────────────────────────────────────
+.pricing-plans {
+  padding: 0 24px 80px;
+  max-width: 1280px;
+  margin: 0 auto;
+
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+
+    @media (max-width: 960px) {
+      grid-template-columns: 1fr;
+    }
+  }
+}
+
+.pricing-plan {
+  position: relative;
+  background: linear-gradient(180deg, $ml-surface 0%, $ml-bg-2 100%);
+  border: 1px solid $ml-border;
+  border-radius: 24px;
+  padding: 36px 28px;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.4s ease, border-color 0.4s ease;
+
+  &:hover {
+    transform: translateY(-4px);
+    border-color: $ml-border-strong;
+  }
+
+  &--highlighted {
+    border-color: rgba(255, 51, 51, 0.35);
+    background: linear-gradient(180deg, #1a0e0e 0%, #100808 100%);
+    box-shadow: 0 30px 80px -20px rgba(200, 30, 30, 0.4),
+      0 0 0 1px rgba(255, 51, 51, 0.1);
+
+    &::before {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      border-radius: 24px;
+      padding: 1px;
+      background: linear-gradient(135deg, rgba(255, 51, 51, 0.5), transparent 50%);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
+  }
+
+  &__badge {
+    position: absolute;
+    top: -12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, $ml-red 0%, $ml-red-deep 100%);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    padding: 6px 14px;
+    border-radius: 999px;
+    box-shadow: 0 8px 20px rgba(200, 30, 30, 0.5);
+  }
+
+  &__head {
+    margin-bottom: 24px;
+  }
+
+  &__name {
+    font-size: 26px;
+    font-weight: 800;
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+
+  &__tag {
+    color: $ml-muted;
+    font-size: 14px;
+    margin: 0;
+  }
+
+  &__price {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 28px;
+    padding-bottom: 28px;
+    border-bottom: 1px solid $ml-border;
+
+    &-value {
+      font-size: 44px;
+      font-weight: 900;
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+
+    &-period {
+      color: $ml-faint;
+      font-size: 14px;
+    }
+  }
+
+  &__cta {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.04);
+    color: $ml-text;
+    border: 1px solid $ml-border-strong;
+    border-radius: 999px;
+    padding: 14px 22px;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    margin-bottom: 28px;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: rgba(255, 255, 255, 0.25);
+      transform: translateY(-1px);
+    }
+
+    &--primary {
+      @include ml-shimmer-btn;
+      border: none;
+      border-radius: 999px;
+      padding: 14px 22px;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+  }
+
+  &__features {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+
+    li {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      color: $ml-text;
+      font-size: 14px;
+      line-height: 1.5;
+
+      svg {
+        width: 16px;
+        height: 16px;
+        color: $ml-red-2;
+        flex-shrink: 0;
+        margin-top: 4px;
+      }
+
+      span {
+        color: rgba(255, 255, 255, 0.86);
+      }
+    }
+  }
+}
+
+// ─── Compare ─────────────────────────────────────────────────────────────
+.pricing-compare {
+  padding: 80px 24px;
+  max-width: 1080px;
+  margin: 0 auto;
+
+  &__title {
+    font-size: clamp(26px, 3vw, 36px);
+    font-weight: 800;
+    margin: 0 0 32px;
+    text-align: center;
+    letter-spacing: -0.02em;
+  }
+
+  &__table-wrap {
+    overflow-x: auto;
+    border: 1px solid $ml-border;
+    border-radius: 20px;
+    background: $ml-surface;
+  }
+
+  &__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 15px;
+    min-width: 600px;
+
+    th,
+    td {
+      padding: 18px 20px;
+      text-align: left;
+      border-bottom: 1px solid $ml-border;
+    }
+
+    th {
+      color: $ml-text;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      background: rgba(255, 255, 255, 0.02);
+
+      &:not(:first-child) {
+        text-align: center;
+      }
+    }
+
+    td {
+      color: $ml-muted;
+
+      &:first-child {
+        color: $ml-text;
+        font-weight: 500;
+      }
+
+      &:not(:first-child) {
+        text-align: center;
+      }
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+  }
+}
+
+// ─── FAQ mini ────────────────────────────────────────────────────────────
+.pricing-faq {
+  padding: 60px 24px;
+  max-width: 1080px;
+  margin: 0 auto;
+
+  &__title {
+    font-size: clamp(26px, 3vw, 36px);
+    font-weight: 800;
+    margin: 0 0 32px;
+    text-align: center;
+    letter-spacing: -0.02em;
+  }
+
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+
+    @media (max-width: 720px) {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  &__item {
+    background: $ml-surface;
+    border: 1px solid $ml-border;
+    border-radius: 16px;
+    padding: 24px;
+
+    h3 {
+      font-size: 17px;
+      font-weight: 700;
+      margin: 0 0 8px;
+    }
+
+    p {
+      color: $ml-muted;
+      font-size: 14px;
+      line-height: 1.6;
+      margin: 0;
+    }
+  }
+}
+
+// ─── CTA ─────────────────────────────────────────────────────────────────
+.pricing-cta {
+  padding: 80px 24px 100px;
+  max-width: 1080px;
+  margin: 0 auto;
+
+  &__inner {
+    position: relative;
+    text-align: center;
+    padding: 64px 24px;
+    background: linear-gradient(135deg, #18090a 0%, #0a0a0a 50%, #1a0606 100%);
+    border: 1px solid rgba(255, 51, 51, 0.18);
+    border-radius: 24px;
+    overflow: hidden;
+
+    &::before {
+      content: '';
+      position: absolute;
+      width: 400px;
+      height: 400px;
+      border-radius: 50%;
+      background: radial-gradient(circle, $ml-red 0%, transparent 70%);
+      filter: blur(90px);
+      top: -180px;
+      left: -120px;
+      opacity: 0.5;
+      pointer-events: none;
+    }
+  }
+
+  &__title {
+    position: relative;
+    z-index: 1;
+    font-size: clamp(28px, 4vw, 44px);
+    font-weight: 900;
+    letter-spacing: -0.02em;
+    margin: 0 0 12px;
+  }
+
+  &__text {
+    position: relative;
+    z-index: 1;
+    color: $ml-muted;
+    font-size: 16px;
+    margin: 0 0 28px;
+  }
+
+  &__btn {
+    @include ml-shimmer-btn;
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    border-radius: 999px;
+    padding: 16px 28px;
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+
+    &:hover svg {
+      transform: translateX(4px);
+    }
+
+    svg {
+      width: 16px;
+      height: 16px;
+      transition: transform 0.3s ease;
+      position: relative;
+      z-index: 1;
+    }
+  }
+}

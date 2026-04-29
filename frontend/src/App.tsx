@@ -2,6 +2,8 @@ import React, { lazy, Suspense, useEffect } from 'react';
 import { createBrowserRouter, RouterProvider, Navigate, type RouteObject } from 'react-router-dom';
 import AuthPage from './pages/AuthPage';
 import HomePage from './pages/HomePage';
+import LandingPage from './pages/LandingPage';
+import PricingPage from './pages/PricingPage';
 import LobbyPage from './pages/LobbyPage';
 import StorySelectionPage from './pages/StorySelectionPage';
 import GamePage from './pages/GamePage';
@@ -48,8 +50,10 @@ const devRoutes: RouteObject[] = DevUiPage
   : [];
 
 const router = createBrowserRouter([
+  { path: '/', element: <LandingPage /> },
+  { path: '/pricing', element: <PricingPage /> },
   { path: '/auth', element: <AuthPage /> },
-  { path: '/', element: <ProtectedRoute><HomePage /></ProtectedRoute> },
+  { path: '/app', element: <ProtectedRoute><HomePage /></ProtectedRoute> },
   { path: '/profile', element: <ProtectedRoute><ProfilePage /></ProtectedRoute> },
   { path: '/sessions/:code/:playerSlug', element: <DevPlayerBootstrapPage /> },
   { path: '/sessions/:code', element: <ProtectedRoute><LobbyPage /></ProtectedRoute> },
