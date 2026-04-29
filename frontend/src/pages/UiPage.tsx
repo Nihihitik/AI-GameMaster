@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 
 // Shared UI components
@@ -39,6 +39,10 @@ import ShowcaseLayout, { SidebarSection } from '../components/showcase/ShowcaseL
 import ShowcaseSection from '../components/showcase/ShowcaseSection';
 import ShowcaseItem from '../components/showcase/ShowcaseItem';
 import { useReplayKey } from '../components/showcase/useReplayKey';
+import { getAllNames } from '../components/audio/AudioTriggerPreview';
+import NarratorPreview from '../components/audio/NarratorPreview';
+import CharacterNameSelect from '../components/audio/CharacterNameSelect';
+import AudioControls from '../components/audio/AudioControls';
 
 import { createDefaultSessionSettings } from '../utils/sessionDefaults';
 import { SessionSettings, RoleConfig } from '../types/game';
@@ -303,6 +307,73 @@ function GameScreenHeaderDemo({ replayKey }: { replayKey: number }) {
 }
 
 // Session settings form demo with local state.
+function CharacterNameSelectDemo() {
+  const [v, setV] = React.useState('');
+  return (
+    <CharacterNameSelect
+      value={v}
+      onChange={setV}
+      occupiedNames={['Артём', 'Марина']}
+    />
+  );
+}
+
+function NamesGallery() {
+  const names = getAllNames();
+  if (!names.length) {
+    return <div style={{ padding: 16, color: 'rgba(255,255,255,0.5)' }}>Манифест пуст</div>;
+  }
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 8, padding: 12 }}>
+      {names.map((n) => (
+        <NameRow key={n.display} name={n} />
+      ))}
+    </div>
+  );
+}
+
+function NameRow({ name }: { name: { display: string; gender: 'm' | 'f'; intro_audio: string; intro_duration_ms: number } }) {
+  const [playing, setPlaying] = React.useState(false);
+  const audioRef = React.useRef<HTMLAudioElement | null>(null);
+  const toggle = () => {
+    if (!audioRef.current) {
+      audioRef.current = new Audio(name.intro_audio);
+      audioRef.current.addEventListener('ended', () => setPlaying(false));
+    }
+    if (playing) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      setPlaying(false);
+    } else {
+      audioRef.current.play().catch(() => setPlaying(false));
+      setPlaying(true);
+    }
+  };
+  React.useEffect(() => () => {
+    if (audioRef.current) audioRef.current.pause();
+  }, []);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 8, background: 'rgba(0,0,0,0.25)', borderRadius: 6 }}>
+      <button
+        onClick={toggle}
+        style={{
+          width: 28, height: 28, borderRadius: '50%',
+          border: '1px solid rgba(200,30,30,0.4)', background: playing ? 'rgba(200,30,30,0.6)' : 'rgba(200,30,30,0.1)',
+          color: '#fff', cursor: 'pointer', fontSize: 11,
+        }}
+      >
+        {playing ? '■' : '▶'}
+      </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span style={{ fontSize: 13, color: '#fff' }}>{name.display}</span>
+        <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>
+          {name.gender === 'f' ? 'жен' : 'муж'} · {(name.intro_duration_ms / 1000).toFixed(1)}с
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function SessionSettingsFormDemo() {
   const [settings, setSettings] = useState<SessionSettings>(() => createDefaultSessionSettings());
   const [playerCount, setPlayerCount] = useState(8);
@@ -335,6 +406,83 @@ const SIDEBAR_SECTIONS: SidebarSection[] = [
   { id: 'backgrounds', title: 'Backgrounds' },
   { id: 'composite', title: 'Composite' },
   { id: 'profile', title: 'Profile' },
+  { id: 'audio', title: 'Audio' },
+];
+
+// Триггеры озвучки сгруппированы по фазам сценария.
+const AUDIO_TRIGGER_GROUPS: Array<{
+  group: string;
+  description?: string;
+  triggers: Array<{ trigger: string; label: string; desc?: string }>;
+}> = [
+  {
+    group: 'Старт игры',
+    description: 'Зачитывается ведущим перед первой ночью.',
+    triggers: [
+      { trigger: 'rules', label: 'Озвучка правил' },
+      { trigger: 'all_acknowledged', label: 'Все ознакомились с ролями' },
+      { trigger: 'intro_personality', label: 'Вступление: личность' },
+      { trigger: 'intro_poem', label: 'Вступление: стих' },
+    ],
+  },
+  {
+    group: 'Ночь — мафия',
+    description: 'Стихи выхода, открытие/закрытие глаз, выбор жертвы.',
+    triggers: [
+      { trigger: 'mafia_exit_poem', label: 'Стих выхода мафии' },
+      { trigger: 'mafia_eyes_open', label: 'Мафия открывает глаза' },
+      { trigger: 'mafia_and_don_eyes_open', label: 'Мафия + Дон открывают глаза' },
+      { trigger: 'mafia_choose', label: 'Выбор мафии' },
+      { trigger: 'mafia_choice_made', label: 'Мафия сделала выбор' },
+      { trigger: 'mafia_eyes_close', label: 'Мафия закрывает глаза' },
+      { trigger: 'mafia_eyes_close_don_chooses', label: 'Мафия закрывает, Дон выбирает' },
+      { trigger: 'don_eyes_close', label: 'Дон закрывает глаза' },
+    ],
+  },
+  {
+    group: 'Ночь — шериф / маньяк / доктор',
+    description: 'Очередь специальных ролей.',
+    triggers: [
+      { trigger: 'sheriff_wakes', label: 'Шериф просыпается' },
+      { trigger: 'sheriff_chooses', label: 'Шериф делает выбор' },
+      { trigger: 'sheriff_chose', label: 'Шериф сделал выбор' },
+      { trigger: 'doctor_eyes_open', label: 'Доктор открывает глаза' },
+      { trigger: 'doctor_eyes_close', label: 'Доктор закрывает глаза' },
+    ],
+  },
+  {
+    group: 'Утро / итоги ночи',
+    description: 'Объявление жертв или спасения.',
+    triggers: [
+      { trigger: 'one_killed', label: 'Один погибший (склейка с именем)' },
+      { trigger: 'no_one_killed_doctor', label: 'Никого не убили — доктор спас' },
+      { trigger: 'after_night_result', label: 'Переход к обсуждению' },
+    ],
+  },
+  {
+    group: 'День — обсуждение и голосование',
+    triggers: [
+      { trigger: 'after_discussion', label: 'Конец обсуждения, начало голосования' },
+      { trigger: 'after_voting', label: 'После голосования (изгнание)' },
+      { trigger: 'no_accuse', label: 'Никого не обвинили' },
+      { trigger: 'tie_first', label: 'Ничья — переголосование' },
+      { trigger: 'tie_host_kick', label: 'Ничья — ведущий кикает' },
+      { trigger: 'tie_players_chose', label: 'Ничья — игроки выбрали' },
+      { trigger: 'end_day_start_night_2', label: 'Конец дня, начало 2-й ночи' },
+    ],
+  },
+  {
+    group: 'Финал',
+    description: 'Объявление победителя — до и после финального голосования.',
+    triggers: [
+      { trigger: 'mafia_win_pre', label: 'Победа мафии (до голосования)' },
+      { trigger: 'mafia_win_post', label: 'Победа мафии (после голосования)' },
+      { trigger: 'city_win_pre', label: 'Победа мирных (до голосования)' },
+      { trigger: 'city_win_post', label: 'Победа мирных (после голосования)' },
+      { trigger: 'maniac_win_pre', label: 'Победа маньяка (без голосования)' },
+      { trigger: 'maniac_win_post', label: 'Победа маньяка (после голосования)' },
+    ],
+  },
 ];
 
 // ───────────────────────── Page ─────────────────────────
@@ -780,6 +928,68 @@ export default function UiPage() {
           >
             <RegisterFormShowcase />
           </ShowcaseItem>
+        </ShowcaseSection>
+
+        {/* ───── Audio ───── */}
+        <ShowcaseSection
+          id="audio"
+          title="Audio"
+          description="Озвучка фаз игры в стиле игрового NarratorScreen — typewriter + аудио, синхронизировано через server-time. Mute и громкость — через AudioControls. Несколько вариантов = рандом. Для name_pair — склейка opener → имя → closer."
+        >
+          <ShowcaseItem
+            name="AudioControls (mute / volume)"
+            path="src/components/audio/AudioControls.tsx"
+            description="Глобальный плеер: mute / unmute и громкость. В игре закреплён в правом нижнем углу, состояние персистится в localStorage. Применяется ко всем аудио-инстансам через useNarrationAudio."
+            stageClassName="ui-stage--wide"
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 16, alignItems: 'center' }}>
+              <AudioControls variant="inline" />
+              <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)' }}>
+                В реальной игре отображается как floating-плашка (правый нижний угол).
+              </span>
+            </div>
+          </ShowcaseItem>
+
+          <ShowcaseItem
+            name="CharacterNameSelect"
+            path="src/components/audio/CharacterNameSelect.tsx"
+            description="Dropdown 15 озвученных имён. Используется в форме лобби — других имён ввести нельзя."
+            stageClassName="ui-stage--wide"
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 16 }}>
+              <CharacterNameSelectDemo />
+            </div>
+          </ShowcaseItem>
+
+          <ShowcaseItem
+            name="Имена персонажей"
+            path="frontend/public/audio/day/<имя>.mp3"
+            description="Озвучка имён, вставляется в склейку при name_pair-триггерах."
+            stageClassName="ui-stage--wide"
+          >
+            <NamesGallery />
+          </ShowcaseItem>
+
+          {AUDIO_TRIGGER_GROUPS.map((g) => (
+            <ShowcaseItem
+              key={g.group}
+              name={g.group}
+              path="audio_manifest.json"
+              description={g.description ?? ''}
+              stageClassName="ui-stage--wide"
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 12 }}>
+                {g.triggers.map((t) => (
+                  <NarratorPreview
+                    key={t.trigger}
+                    trigger={t.trigger}
+                    label={t.label}
+                    description={t.desc}
+                  />
+                ))}
+              </div>
+            </ShowcaseItem>
+          ))}
         </ShowcaseSection>
       </ShowcaseLayout>
     </div>

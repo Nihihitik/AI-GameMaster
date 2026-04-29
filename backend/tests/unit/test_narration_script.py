@@ -6,14 +6,17 @@ from services.narration_script import (
 )
 
 
-def test_mafia_intro_returns_shared_two_step_sequence() -> None:
+def test_mafia_intro_returns_shared_three_step_sequence() -> None:
+    """Мафия intro теперь 3 шага: стих выхода, открытие глаз, выбор жертвы.
+    Каждый шаг — свой trigger для маппинга в audio_manifest."""
     steps = turn_intro_steps("mafia", "session-1:night-1", has_don=True)
 
-    assert len(steps) == 2
-    assert steps[0]["step_index"] == 1
-    assert steps[1]["step_index"] == 2
-    assert steps[1]["steps_total"] == 2
+    assert len(steps) == 3
+    assert [s["step_index"] for s in steps] == [1, 2, 3]
+    assert steps[-1]["steps_total"] == 3
     assert "Дон Мафия" in steps[1]["text"]
+    triggers = [s["trigger"] for s in steps]
+    assert triggers == ["mafia_exit_poem", "mafia_and_don_eyes_open", "mafia_choose"]
 
 
 def test_night_result_keeps_shared_step_count() -> None:

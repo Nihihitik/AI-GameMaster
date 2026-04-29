@@ -29,8 +29,18 @@ export interface Phase {
   vote_round?: number;
 }
 
+export interface AudioSegment {
+  url: string;
+  duration_ms: number;
+}
+
 export interface Announcement {
-  audio_url?: string;
+  audio_url?: string | null;
+  // Для name_pair (склейка opener → имя → closer) — клиент проигрывает
+  // последовательно. Если задан — audio_url игнорируется. duration_ms суммарный.
+  audio_segments?: AudioSegment[];
+  // Имя файла (или склейка имён через ", ") — для дев-оверлея и /ui.
+  audio_file_name?: string;
   text: string;
   duration_ms: number;
   key?: string;

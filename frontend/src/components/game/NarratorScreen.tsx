@@ -1,10 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useGameStore } from '../../stores/gameStore';
+import { useNarrationAudio } from '../../hooks/useNarrationAudio';
 import AmbientBackground from '../ui/AmbientBackground';
 import ProgressBar from '../ui/ProgressBar';
 import './NarratorScreen.scss';
 
-const CHAR_INTERVAL_MS = 45;
+// Дефолтный шаг — используется только если нет duration_ms у announcement
+// (т.е. text-only fallback без аудио).
+const DEFAULT_CHAR_INTERVAL_MS = 45;
 const TICK_INTERVAL_MS = 45;
 
 function getStartedAtMs(startedAtIso?: string): number | null {
@@ -13,14 +16,24 @@ function getStartedAtMs(startedAtIso?: string): number | null {
   return Number.isFinite(ts) ? ts : null;
 }
 
-function computeDisplayedChars(textLen: number, startedAtMs: number | null, now: number): number {
+function getCharInterval(textLen: number, durationMs: number | undefined): number {
+  // Если есть длительность аудио — растягиваем typewriter ровно на это время.
+  // textLen=0 защищаемся от деления на 0.
+  if (durationMs && durationMs > 0 && textLen > 0) {
+    return durationMs / textLen;
+  }
+  return DEFAULT_CHAR_INTERVAL_MS;
+}
+
+function computeDisplayedChars(textLen: number, startedAtMs: number | null, now: number, durationMs: number | undefined): number {
   if (textLen <= 0) return 0;
   if (startedAtMs === null) {
     // Нет server-time — fallback на «начать с 0 при mount».
     return 0;
   }
   const elapsedMs = Math.max(0, now - startedAtMs);
-  return Math.min(textLen, Math.floor(elapsedMs / CHAR_INTERVAL_MS));
+  const charInterval = getCharInterval(textLen, durationMs);
+  return Math.min(textLen, Math.floor(elapsedMs / charInterval));
 }
 
 function computeProgress(durationMs: number | undefined, startedAtMs: number | null, textLen: number, displayedChars: number, now: number): number {
@@ -34,6 +47,7 @@ function computeProgress(durationMs: number | undefined, startedAtMs: number | n
 
 export default function NarratorScreen() {
   const announcement = useGameStore((s) => s.currentAnnouncement);
+  const { currentFileName } = useNarrationAudio(announcement);
   const currentText = announcement?.text ?? '';
   const announcementKey = announcement?.key ?? currentText;
   const startedAtMs = getStartedAtMs(announcement?.started_at);
@@ -42,14 +56,14 @@ export default function NarratorScreen() {
   // Сразу при mount/смене announcement — догоняем то место, где должен быть typewriter
   // согласно server-time. Это синхронизирует разные клиенты и refresh-нутые вкладки.
   const [displayedChars, setDisplayedChars] = useState(() =>
-    computeDisplayedChars(currentText.length, startedAtMs, Date.now())
+    computeDisplayedChars(currentText.length, startedAtMs, Date.now(), durationMs)
   );
   const [progress, setProgress] = useState(() =>
     computeProgress(
       durationMs,
       startedAtMs,
       currentText.length,
-      computeDisplayedChars(currentText.length, startedAtMs, Date.now()),
+      computeDisplayedChars(currentText.length, startedAtMs, Date.now(), durationMs),
       Date.now(),
     )
   );
@@ -57,7 +71,7 @@ export default function NarratorScreen() {
 
   // При смене announcement пересчитать «откуда продолжать».
   useEffect(() => {
-    const next = computeDisplayedChars(currentText.length, startedAtMs, Date.now());
+    const next = computeDisplayedChars(currentText.length, startedAtMs, Date.now(), durationMs);
     setDisplayedChars(next);
     setProgress(computeProgress(durationMs, startedAtMs, currentText.length, next, Date.now()));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -68,7 +82,7 @@ export default function NarratorScreen() {
 
     const tick = () => {
       const now = Date.now();
-      const nextChars = computeDisplayedChars(currentText.length, startedAtMs, now);
+      const nextChars = computeDisplayedChars(currentText.length, startedAtMs, now, durationMs);
       setDisplayedChars((prev) => (nextChars > prev ? nextChars : prev));
       setProgress(computeProgress(durationMs, startedAtMs, currentText.length, nextChars, now));
       const allDone =
@@ -126,6 +140,12 @@ export default function NarratorScreen() {
         {announcement?.steps_total && announcement.steps_total > 1 && (
           <div className="narrator-screen__counter">
             {announcement.step_index ?? 1} / {announcement.steps_total}
+          </div>
+        )}
+
+        {process.env.NODE_ENV === 'development' && (currentFileName || announcement?.audio_file_name) && (
+          <div className="narrator-screen__file" title="dev-only">
+            {currentFileName ?? announcement?.audio_file_name}
           </div>
         )}
       </div>

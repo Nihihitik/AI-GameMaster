@@ -43,6 +43,8 @@ from services.narration_script import (
     vote_result_steps,
     vote_tie_steps,
 )
+from services.narration_audio import resolve_steps
+from services.audio_manifest import get_manifest as get_audio_manifest
 from services.timer_service import timer_service
 from services.runtime_state import runtime_state
 from services.ws_manager import ws_manager
@@ -156,6 +158,13 @@ async def _emit_phase_changed(
     await ws_manager.send_to_session(session_id, {"type": "phase_changed", "payload": payload})
 
 
+def _gender_for_name(display_name: str | None) -> str | None:
+    if not display_name:
+        return None
+    n = get_audio_manifest().name_by_display(display_name)
+    return n.gender if n else None
+
+
 async def _play_phase_announcements(
     session_id: uuid.UUID,
     phase_payload: dict,
@@ -164,8 +173,15 @@ async def _play_phase_announcements(
     db: AsyncSession | None = None,
     phase_id: uuid.UUID | None = None,
     persist: bool = False,
+    target_player_name: str | None = None,
 ) -> None:
-    for announcement in steps:
+    target_gender = _gender_for_name(target_player_name)
+    enriched = resolve_steps(
+        steps,
+        target_player_name=target_player_name,
+        target_player_gender=target_gender,
+    )
+    for announcement in enriched:
         await _emit_phase_changed(
             session_id,
             {**phase_payload, "announcement": announcement},
@@ -1007,12 +1023,19 @@ async def resolve_night(db: AsyncSession, session: Session, phase: GamePhase) ->
             "blocked_player_name": blocked_player.name if blocked_player else None,
         },
         }
-        morning_steps = night_result_steps(
+        morning_steps_raw = night_result_steps(
         f"{session.id}:night_result:{phase.phase_number}",
         phase_number=phase.phase_number,
         died_names=[p.name for p in died_players],
         saved_name=(saved_player.name if saved_player and healed_id is not None and healed_id not in final_death_ids else None),
         blocked_name=(blocked_player.name if blocked_player else None),
+        )
+        # Резолв аудио: для "one_killed" подставляется имя жертвы.
+        single_victim_name = died_players[0].name if len(died_players) == 1 else None
+        morning_steps = resolve_steps(
+            morning_steps_raw,
+            target_player_name=single_victim_name,
+            target_player_gender=_gender_for_name(single_victim_name),
         )
         first_morning = await _set_runtime_announcement(session.id, morning_steps[0]) if morning_steps else None
         db.add(
@@ -1364,7 +1387,8 @@ async def resolve_votes(session_id: uuid.UUID):
                 for v in votes
             ]
             if tied_ids and eliminated_id is None and rt.vote_round == 1:
-                tie_steps = vote_tie_steps(f"{session_id}:day:{phase.phase_number}:vote_tie")
+                tie_steps_raw = vote_tie_steps(f"{session_id}:day:{phase.phase_number}:vote_tie")
+                tie_steps = resolve_steps(tie_steps_raw)
                 tie_announcement = await _set_runtime_announcement(session_id, tie_steps[0])
                 db.add(
                     GameEvent(
@@ -1418,11 +1442,17 @@ async def resolve_votes(session_id: uuid.UUID):
                 eliminated_player.status = "dead"
 
             winner = await check_win_condition(db, session_id) if eliminated_player else None
-            vote_steps = [] if winner else vote_result_steps(
+            vote_steps_raw = [] if winner else vote_result_steps(
                 f"{session_id}:day:{phase.phase_number}:vote_result:{rt.vote_round}",
                 eliminated_name=(eliminated_player.name if eliminated_player else None),
                 random_elimination=bool(rt.vote_round >= 2 and len(tied_ids) > 1 and eliminated_player),
                 unanimous_revote=bool(rt.vote_round >= 2 and len(tied_ids) <= 1 and eliminated_player),
+            )
+            elim_name = eliminated_player.name if eliminated_player else None
+            vote_steps = resolve_steps(
+                vote_steps_raw,
+                target_player_name=elim_name,
+                target_player_gender=_gender_for_name(elim_name),
             )
             vote_announcement = await _set_runtime_announcement(session_id, vote_steps[0]) if vote_steps else None
             db.add(
@@ -1632,14 +1662,18 @@ async def finish_game(
         winner=winner,
     )
 
-    finale_announcement = _stamp_started_at(
-        game_finished_steps(
-            f"{session.id}:finished:{winner}:{session.ended_at.isoformat() if session.ended_at else 'end'}",
-            winner=winner,
-            eliminated_name=eliminated_name,
-            before_voting=before_voting,
-        )[0]
+    finale_steps = game_finished_steps(
+        f"{session.id}:finished:{winner}:{session.ended_at.isoformat() if session.ended_at else 'end'}",
+        winner=winner,
+        eliminated_name=eliminated_name,
+        before_voting=before_voting,
     )
+    finale_resolved = resolve_steps(
+        finale_steps,
+        target_player_name=eliminated_name,
+        target_player_gender=_gender_for_name(eliminated_name),
+    )
+    finale_announcement = _stamp_started_at(finale_resolved[0]) if finale_resolved else None
     await ws_manager.send_to_session(
         session.id,
         {

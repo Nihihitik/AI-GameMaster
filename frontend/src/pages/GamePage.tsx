@@ -14,6 +14,7 @@ import FinaleScreen from '../components/game/FinaleScreen';
 import RulesModal, { RulesButton } from '../components/game/RulesModal';
 import GameScreenHeader from '../components/game/GameScreenHeader';
 import DevPlayerQuickPill from '../components/dev/DevPlayerQuickPill';
+import AudioControls from '../components/audio/AudioControls';
 import Button from '../components/ui/Button';
 import Loader from '../components/ui/Loader';
 import Timer from '../components/ui/Timer';
@@ -328,6 +329,7 @@ export default function GamePage() {
         </div>
       )}
       {renderScreen()}
+      <AudioControls variant="floating" />
       <RulesModal isOpen={showRules} onClose={() => setShowRules(false)} />
     </>
   );

@@ -5,6 +5,8 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Alert from '../components/ui/Alert';
 import SessionSettingsForm from '../components/session/SessionSettingsForm';
+import CharacterNameSelect from '../components/audio/CharacterNameSelect';
+import { sessionApi } from '../api/sessionApi';
 import { useSessionStore, getSpecialRolesCount } from '../stores/sessionStore';
 import { useAuthStore } from '../stores/authStore';
 import { RoleConfig, SessionSettings } from '../types/game';
@@ -33,6 +35,8 @@ export default function HomePage() {
   const [creatingTestLobby, setCreatingTestLobby] = useState(false);
   const [joining, setJoining] = useState(false);
   const [createError, setCreateError] = useState('');
+  // Имена, занятые другими игроками найденной по коду сессии (для disabled).
+  const [joinOccupiedNames, setJoinOccupiedNames] = useState<string[]>([]);
 
   const [playerCount, setPlayerCount] = useState(8);
   const [createSettings, setCreateSettings] = useState(() => createDefaultSessionSettings());
@@ -118,12 +122,20 @@ export default function HomePage() {
         return;
       }
       setJoinError('');
+      // Подтягиваем список игроков заранее, чтобы dropdown подсветил занятые имена.
+      try {
+        const detail = await sessionApi.getByCode(joinCode.trim().toUpperCase());
+        setJoinOccupiedNames(detail.data.players.map((p) => p.name));
+      } catch (err) {
+        // Не критично — пусть пользователь выберет, бэк отвалит при коллизии.
+        setJoinOccupiedNames([]);
+      }
       setJoinStep('name');
       return;
     }
 
     if (joinName.trim().length < 1) {
-      setJoinError('Введите ваше имя');
+      setJoinError('Выберите имя персонажа');
       return;
     }
 
@@ -158,6 +170,7 @@ export default function HomePage() {
     setJoinName('');
     setJoinStep('code');
     setJoinError('');
+    setJoinOccupiedNames([]);
   };
 
   const handleCloseCreateModal = () => {
@@ -252,17 +265,20 @@ export default function HomePage() {
             </div>
           ) : (
             <div className="join-modal__field">
-              <p className="join-modal__hint">Как вас будут звать в игре?</p>
-              <Input
-                label="Имя игрока"
+              <p className="join-modal__hint">Выберите персонажа из списка озвученных имён</p>
+              <CharacterNameSelect
                 value={joinName}
                 onChange={setJoinName}
+                occupiedNames={joinOccupiedNames}
                 error={joinError}
               />
             </div>
           )}
           <div className="join-modal__actions">
-            <Button onClick={handleJoinSubmit} disabled={joining}>
+            <Button
+              onClick={handleJoinSubmit}
+              disabled={joining || (joinStep === 'name' && joinName.trim().length === 0)}
+            >
               {joining ? 'Загрузка...' : joinStep === 'code' ? 'Далее' : 'Присоединиться'}
             </Button>
           </div>
@@ -276,9 +292,8 @@ export default function HomePage() {
       >
         <div className="create-modal">
           <div className="create-modal__section">
-            <h4 className="create-modal__section-title">Твоё имя в игре</h4>
-            <Input
-              label="Имя игрока"
+            <h4 className="create-modal__section-title">Твой персонаж</h4>
+            <CharacterNameSelect
               value={hostName}
               onChange={setHostName}
             />
@@ -296,7 +311,10 @@ export default function HomePage() {
           {createError && <Alert variant="error">{createError}</Alert>}
 
           <div className="create-modal__actions">
-            <Button onClick={handleConfirmCreate} disabled={creating}>
+            <Button
+              onClick={handleConfirmCreate}
+              disabled={creating || hostName.trim().length === 0}
+            >
               {creating ? 'Создание...' : 'Создать'}
             </Button>
           </div>
