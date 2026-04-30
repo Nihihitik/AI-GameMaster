@@ -157,6 +157,18 @@ async def restore_runtime_like_fields(
         if announcement_event and isinstance(announcement_event.payload, dict):
             announcement = announcement_event.payload.get("announcement")
             announcement_started_at = announcement_event.created_at
+    # Предпочитаем started_at из самого announcement payload, если он там есть —
+    # это originalный момент эмиссии, ровно тот, что клиенты видели изначально.
+    # event.created_at = момент DB-записи, он >= started_at и даёт сдвиг
+    # озвучки/typewriter после рестарта сервера.
+    if announcement and isinstance(announcement, dict):
+        payload_started_at = announcement.get("started_at")
+        if isinstance(payload_started_at, str) and payload_started_at:
+            try:
+                parsed = datetime.fromisoformat(payload_started_at.replace("Z", "+00:00"))
+                announcement_started_at = parsed
+            except ValueError:
+                pass
     # Если announcement не содержит started_at (старые записи или ручное создание) —
     # подставим из created_at события, чтобы клиент мог синхронизировать typewriter.
     if (

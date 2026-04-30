@@ -6,20 +6,22 @@ import type { Announcement, AudioSegment } from '../types/game';
  * Воспроизведение аудио озвучки для announcement, синхронизованное по
  * server-time (`started_at`).
  *
- * Правила:
- * - При смене announcement.key — восстанавливаем позицию: считаем elapsedMs
- *   от `started_at`, находим активный сегмент и проигрываем его с нужного offset.
- * - На событие `ended` HTMLAudioElement переключаемся на следующий сегмент.
+ * Принципы:
+ * - При каждом фактическом старте сегмента (loadedmetadata, retry после
+ *   жеста, onEnded) пересчитываем `(index, offsetMs)` из текущего
+ *   `Date.now() - startedAtMs`, а не из снимка на момент создания эффекта.
+ *   Это закрывает дрейф из-за autoplay-wait и задержки `loadedmetadata`.
+ * - Раз в ~500мс drift-loop проверяет, что `audio.currentTime` совпадает
+ *   с серверным `expected`, и при расхождении >250мс делает seek/skip.
  * - На unmount/смену announcement — пауза + сброс src.
- * - Если `audio_url` и `audio_segments` оба пусты — просто ничего не играем.
  *
- * Возвращает имя текущего файла (для дев-оверлея) и индекс активного сегмента.
+ * Возвращает имя текущего файла, индекс активного сегмента и флаг
+ * блокировки autoplay.
  */
 export function useNarrationAudio(announcement: Announcement | null) {
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState(-1);
   const [currentFileName, setCurrentFileName] = useState<string | null>(null);
   // true пока браузер блокирует autoplay и мы ждём первого жеста пользователя.
-  // Используется в UI чтобы показать prompt «Нажмите чтобы включить озвучку».
   const [needsGesture, setNeedsGesture] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const muted = useAudioStore((s) => s.muted);
@@ -55,132 +57,223 @@ export function useNarrationAudio(announcement: Announcement | null) {
     if (segments.length === 0) return;
 
     const startedAtMs = announcement.started_at ? Date.parse(announcement.started_at) : NaN;
-    const now = Date.now();
-    const elapsedMs = Number.isFinite(startedAtMs) ? Math.max(0, now - startedAtMs) : 0;
 
-    let acc = 0;
-    let activeIndex = 0;
-    for (let i = 0; i < segments.length; i += 1) {
-      const dur = Math.max(0, segments[i].duration_ms || 0);
-      if (elapsedMs < acc + dur) {
-        activeIndex = i;
-        break;
-      }
-      acc += dur;
-      if (i === segments.length - 1) {
-        // elapsed превысил суммарную длительность — больше не играем.
-        return;
-      }
-    }
-    const segmentOffsetMs = Math.max(0, elapsedMs - acc);
+    // Если уже на старте позиция за пределами всех сегментов — ничего не играем.
+    const initial = pickPosition(segments, startedAtMs, Date.now());
+    if (!initial) return;
 
-    // Создаём цепочку HTMLAudioElement: один элемент, переключаем src.
     const audio = new Audio();
-    // Текущее состояние из стора применяем сразу (далее обновляется в эффекте).
     const audioState = useAudioStore.getState();
     audio.muted = audioState.muted;
     audio.volume = audioState.volume;
     audioRef.current = audio;
 
-    // Текущий индекс сегмента. `let` — потому что замыкание `onEnded`
-    // должно видеть актуальное значение между переключениями src.
-    let currentIndex = activeIndex;
+    let currentIndex = initial.index;
     let cancelled = false;
-    // Ссылка на функцию-снятие висящих listener'ов жеста (autoplay retry).
-    // Если announcement сменится до того, как пользователь кликнет —
-    // надо не оставлять зомби-listener'ов на document.
-    let gestureCleanupRef: (() => void) | null = null;
+    let gestureCleanup: (() => void) | null = null;
+    let driftTimer: ReturnType<typeof setInterval> | null = null;
+    // Поколение «текущего src». Каждый playFrom инкрементирует и фиксирует
+    // в свою closure через myGen. Если drift-loop / onEnded / gesture-retry
+    // успели вызвать playFrom второй раз, пока loadedmetadata от первого ещё
+    // не пришёл, оба seekAndPlay нацелены на разные segments[idx], и нельзя
+    // позволить старому отработать поверх нового src.
+    let loadGeneration = 0;
 
-    const playFrom = (idx: number, offsetMs: number) => {
+    const stopDriftLoop = () => {
+      if (driftTimer) {
+        clearInterval(driftTimer);
+        driftTimer = null;
+      }
+    };
+
+    const startDriftLoop = () => {
+      stopDriftLoop();
+      // Без валидного startedAtMs нет серверного эталона — drift-loop
+      // некорректен (pickPosition всегда вернёт {0,0} и мы будем перематывать
+      // в начало). Просто играем естественно через onEnded → idx+1.
+      if (!Number.isFinite(startedAtMs)) return;
+      // Раз в 500мс сравниваем audio.currentTime с серверным expected.
+      // При расхождении >250мс — seek; если elapsed ушёл за пределы текущего
+      // сегмента — переходим к актуальному (или останавливаемся, если всё
+      // отзвучало по серверу).
+      driftTimer = setInterval(() => {
+        if (cancelled) return;
+        if (audio.paused || audio.readyState < 1 /* HAVE_METADATA */) return;
+        const pos = pickPosition(segments, startedAtMs, Date.now());
+        if (!pos) {
+          stopDriftLoop();
+          try { audio.pause(); } catch { /* noop */ }
+          setCurrentSegmentIndex(-1);
+          setCurrentFileName(null);
+          return;
+        }
+        if (pos.index !== currentIndex) {
+          // Серверное время ушло на следующий сегмент — переключаемся.
+          playFrom(pos.index, pos.offsetMs);
+          return;
+        }
+        const expectedSec = pos.offsetMs / 1000;
+        const drift = audio.currentTime - expectedSec;
+        if (Math.abs(drift) > 0.25) {
+          try {
+            audio.currentTime = expectedSec;
+          } catch {
+            /* noop — некоторые браузеры могут бросить, переживём */
+          }
+        }
+      }, 500);
+    };
+
+    const attachGestureRetry = () => {
+      // Браузерный autoplay-policy блокирует play() без user-gesture.
+      // Ждём первого жеста, затем пересчитываем позицию (за время ожидания
+      // server-time мог уйти на десятки секунд) и ретраим.
+      setNeedsGesture(true);
+      const cleanup = () => {
+        document.removeEventListener('click', retry);
+        document.removeEventListener('keydown', retry);
+        document.removeEventListener('touchstart', retry);
+        document.removeEventListener('pointerdown', retry);
+      };
+      const retry = () => {
+        cleanup();
+        gestureCleanup = null;
+        if (cancelled) return;
+        setNeedsGesture(false);
+        const pos = pickPosition(segments, startedAtMs, Date.now());
+        if (!pos) {
+          // Пока ждали жеста, всё уже отзвучало по серверу — не играем.
+          setCurrentSegmentIndex(-1);
+          setCurrentFileName(null);
+          return;
+        }
+        // Если за время ожидания мы ушли на следующий сегмент — переключаемся,
+        // иначе просто переставляем currentTime и снова пытаемся play().
+        if (pos.index !== currentIndex) {
+          playFrom(pos.index, pos.offsetMs);
+        } else {
+          try {
+            audio.currentTime = pos.offsetMs / 1000;
+          } catch {
+            /* noop */
+          }
+          const p = audio.play();
+          if (p && typeof p.catch === 'function') {
+            p.catch((retryErr) => {
+              console.warn('[narration audio] retry after gesture failed:', retryErr);
+            });
+          }
+          startDriftLoop();
+        }
+      };
+      document.addEventListener('click', retry, { once: true });
+      document.addEventListener('keydown', retry, { once: true });
+      document.addEventListener('touchstart', retry, { once: true });
+      document.addEventListener('pointerdown', retry, { once: true });
+      gestureCleanup = cleanup;
+    };
+
+    const playFrom = (idx: number, fallbackOffsetMs: number) => {
       if (cancelled) return;
+      stopDriftLoop();
       if (idx >= segments.length) {
         setCurrentSegmentIndex(-1);
         setCurrentFileName(null);
         return;
       }
+      const myGen = ++loadGeneration;
       currentIndex = idx;
       setCurrentSegmentIndex(idx);
       setCurrentFileName(extractFileName(segments[idx].url));
 
       audio.src = segments[idx].url;
 
-      const startPlayback = () => {
-        if (cancelled) return;
-        const playPromise = audio.play();
-        if (playPromise && typeof playPromise.catch === 'function') {
-          playPromise.catch((err) => {
-            // Если announcement уже сменился (effect cleanup отработал) —
-            // не вешаем listener'ы, иначе они окажутся «зомби» на document.
-            if (cancelled) return;
-            // Браузерный autoplay-policy блокирует play() без user-gesture.
-            // Это случается когда игрок открывает dev-ссылку в новой вкладке —
-            // взаимодействия ещё не было.  Решение: ждём первого жеста и
-            // ретраим play(). Audio.currentTime сохраняется, поэтому реплика
-            // подхватится с актуальной позиции согласно server-time.
-            console.warn('[narration audio] play() rejected, awaiting user gesture:', err);
-            setNeedsGesture(true);
-            const cleanupGesture = () => {
-              document.removeEventListener('click', retry);
-              document.removeEventListener('keydown', retry);
-              document.removeEventListener('touchstart', retry);
-              document.removeEventListener('pointerdown', retry);
-            };
-            const retry = () => {
-              cleanupGesture();
-              if (cancelled) return;
-              const p = audio.play();
-              if (p && typeof p.catch === 'function') {
-                p.catch((retryErr) => {
-                  console.warn('[narration audio] retry after gesture failed:', retryErr);
-                });
-              }
-              // Жест был — снимаем prompt, даже если retry упал
-              // (повторно prompt не поможет, нужно решать на стороне браузера).
-              setNeedsGesture(false);
-            };
-            document.addEventListener('click', retry, { once: true });
-            document.addEventListener('keydown', retry, { once: true });
-            document.addEventListener('touchstart', retry, { once: true });
-            document.addEventListener('pointerdown', retry, { once: true });
-            gestureCleanupRef = cleanupGesture;
-          });
-        }
-      };
+      const isStale = () => cancelled || myGen !== loadGeneration;
 
-      if (offsetMs > 0) {
-        // Сидим в середину сегмента — ждём метаданные, иначе Safari/Firefox
-        // могут проигнорировать или бросить INVALID_STATE_ERR.
-        const onMetaLoaded = () => {
-          if (cancelled) return;
+      const seekAndPlay = () => {
+        if (isStale()) return;
+        let offsetMs = fallbackOffsetMs;
+        // Пересчитываем offset «здесь и сейчас» — за время load() могло
+        // уйти 100мс+ (HMR throttling, Safari tab throttling и т.п.).
+        // Если startedAtMs невалиден — нет серверного эталона, играем с
+        // fallbackOffsetMs (обычно 0 для последующих сегментов).
+        if (Number.isFinite(startedAtMs)) {
+          const pos = pickPosition(segments, startedAtMs, Date.now());
+          if (pos && pos.index === idx) {
+            offsetMs = pos.offsetMs;
+          } else if (pos && pos.index !== idx) {
+            // Сервер уже на следующем сегменте — перепрыгиваем туда.
+            playFrom(pos.index, pos.offsetMs);
+            return;
+          } else if (!pos) {
+            // Всё уже отзвучало.
+            setCurrentSegmentIndex(-1);
+            setCurrentFileName(null);
+            return;
+          }
+        }
+        if (offsetMs > 0) {
           try {
             audio.currentTime = offsetMs / 1000;
           } catch {
-            /* некоторые браузеры могут бросить, продолжим воспроизведение с 0 */
+            /* noop */
           }
-          startPlayback();
-        };
-        audio.addEventListener('loadedmetadata', onMetaLoaded, { once: true });
-        // Гарантируем загрузку.
-        audio.load();
-      } else {
-        startPlayback();
-      }
+        }
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          playPromise.catch((err) => {
+            if (isStale()) return;
+            // AbortError — это нормальный side-effect, когда мы успели
+            // заменить src (drift-skip к следующему сегменту, новый
+            // playFrom от onEnded и т.п.). НЕ показываем gesture-prompt.
+            // NotAllowedError — реальная блокировка autoplay браузером.
+            const name = err && (err as { name?: string }).name;
+            if (name === 'AbortError') return;
+            console.warn('[narration audio] play() rejected, awaiting user gesture:', err);
+            attachGestureRetry();
+          });
+        }
+        startDriftLoop();
+      };
+
+      // loadedmetadata нужен и для seek, и для того, чтобы offset был
+      // достоверным (audio.duration становится известной).
+      const onMetaLoaded = () => {
+        if (isStale()) return;
+        seekAndPlay();
+      };
+      audio.addEventListener('loadedmetadata', onMetaLoaded, { once: true });
+      audio.load();
     };
 
     const onEnded = () => {
-      playFrom(currentIndex + 1, 0);
+      if (cancelled) return;
+      // Без серверного эталона переходим на следующий сегмент по порядку.
+      // С эталоном — пересчитываем актуальную позицию и пропускаем
+      // промежуточные сегменты, если сервер уже ушёл дальше.
+      if (!Number.isFinite(startedAtMs)) {
+        playFrom(currentIndex + 1, 0);
+        return;
+      }
+      const pos = pickPosition(segments, startedAtMs, Date.now());
+      if (!pos) {
+        setCurrentSegmentIndex(-1);
+        setCurrentFileName(null);
+        return;
+      }
+      playFrom(pos.index, pos.offsetMs);
     };
 
     audio.addEventListener('ended', onEnded);
 
-    // Стартуем активный сегмент с нужным оффсетом.
-    playFrom(activeIndex, segmentOffsetMs);
+    playFrom(initial.index, initial.offsetMs);
 
     return () => {
       cancelled = true;
-      if (gestureCleanupRef) {
-        gestureCleanupRef();
-        gestureCleanupRef = null;
+      stopDriftLoop();
+      if (gestureCleanup) {
+        gestureCleanup();
+        gestureCleanup = null;
       }
       audio.removeEventListener('ended', onEnded);
       try {
@@ -199,6 +292,42 @@ export function useNarrationAudio(announcement: Announcement | null) {
     currentFileName,
     needsGesture,
   };
+}
+
+/**
+ * Вычисляет активный сегмент и offset внутри него на момент `now`,
+ * исходя из `startedAtMs` (UNIX ms) и списка сегментов с duration_ms.
+ *
+ * - Если `startedAtMs` невалиден (NaN) — играем с самого начала первого
+ *   сегмента: `{index: 0, offsetMs: 0}`.
+ * - Если `now < startedAtMs` (clock skew) — тоже с начала.
+ * - Если `now >= startedAtMs + sum(duration_ms)` — возвращает `null`,
+ *   т.е. всё уже отзвучало.
+ *
+ * Чистая функция — экспортируется для юнит-тестов.
+ */
+export function pickPosition(
+  segments: AudioSegment[],
+  startedAtMs: number,
+  now: number,
+): { index: number; offsetMs: number } | null {
+  if (segments.length === 0) return null;
+  if (!Number.isFinite(startedAtMs)) {
+    return { index: 0, offsetMs: 0 };
+  }
+  const elapsedMs = now - startedAtMs;
+  if (elapsedMs <= 0) {
+    return { index: 0, offsetMs: 0 };
+  }
+  let acc = 0;
+  for (let i = 0; i < segments.length; i += 1) {
+    const dur = Math.max(0, segments[i].duration_ms || 0);
+    if (elapsedMs < acc + dur) {
+      return { index: i, offsetMs: Math.max(0, elapsedMs - acc) };
+    }
+    acc += dur;
+  }
+  return null;
 }
 
 function resolveSegments(a: Announcement): AudioSegment[] {
