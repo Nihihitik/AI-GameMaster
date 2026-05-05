@@ -38,7 +38,7 @@ interface SessionState {
 
   // API-backed actions
   createSession: (data: CreateSessionRequest) => Promise<string>;
-  joinSession: (code: string, name: string) => Promise<void>;
+  joinSession: (code: string, name?: string) => Promise<void>;
   loadByCode: (code: string) => Promise<void>;
   setSettings: (settings: UpdateSettingsRequest) => Promise<void>;
   hydrateSessionDetail: (detail: SessionDetailResponse) => void;
@@ -49,6 +49,10 @@ interface SessionState {
   setPlayers: (list: PlayerInList[]) => void;
   applySessionSettings: (settings: SessionSettings) => void;
   applyHostTransfer: (newHostUserId: string, newHostPlayerId?: string | null) => void;
+  applyPlayerRenamed: (playerId: string, name: string) => void;
+
+  // API: переименование своего игрока (этап выбора имени после сюжета).
+  setMyName: (name: string) => Promise<void>;
 
   // Local-only actions
   setWithStory: (value: boolean) => void;
@@ -115,7 +119,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   joinSession: async (code, name) => {
-    const joinResponse = await sessionApi.join(code, { name });
+    const joinResponse = await sessionApi.join(code, name ? { name } : {});
     const joinData = joinResponse.data;
     const detail = await sessionApi.getByCode(code);
     const detailData = detail.data;
@@ -222,6 +226,31 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   applySessionSettings: (settings) => {
     set({ settings });
+  },
+
+  applyPlayerRenamed: (playerId, name) => {
+    set((state) => ({
+      players: state.players.map((p) =>
+        p.id === playerId ? { ...p, name } : p,
+      ),
+    }));
+  },
+
+  setMyName: async (name) => {
+    const state = get();
+    if (!state.session) return;
+    const response = await sessionApi.setMyName(state.session.id, name);
+    const data = response.data;
+    set((s) => ({
+      players: s.players.map((p) =>
+        p.id === data.player_id ? { ...p, name: data.name } : p,
+      ),
+    }));
+    logger.info('session.player_renamed', 'Player renamed', {
+      sessionId: state.session.id,
+      playerId: data.player_id,
+      name: data.name,
+    }, { sessionId: state.session.id });
   },
 
   applyHostTransfer: (newHostUserId, newHostPlayerId) => {

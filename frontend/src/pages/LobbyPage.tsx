@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams, useBlocker } from 'react-router-dom';
 import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
-import Toggle from '../components/ui/Toggle';
 import Loader from '../components/ui/Loader';
 import Alert from '../components/ui/Alert';
 import WaitingBlock from '../components/ui/WaitingBlock';
@@ -47,8 +46,6 @@ export default function LobbyPage() {
   const players = useSessionStore((s) => s.players);
   const settings = useSessionStore((s) => s.settings);
   const isHost = useSessionStore((s) => s.isHost);
-  const withStory = useSessionStore((s) => s.withStory);
-  const setWithStory = useSessionStore((s) => s.setWithStory);
   const myPlayerId = useSessionStore((s) => s.myPlayerId);
   const setSettings = useSessionStore((s) => s.setSettings);
   const hydrateSessionDetail = useSessionStore((s) => s.hydrateSessionDetail);
@@ -85,8 +82,15 @@ export default function LobbyPage() {
   // в error-view). F5/reload здесь не ловится — это специально, чтобы не выбивать игрока при
   // перезагрузке страницы (см. план).
   const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      !allowNavigationRef.current && currentLocation.pathname !== nextLocation.pathname
+    ({ currentLocation, nextLocation }) => {
+      if (allowNavigationRef.current) return false;
+      if (currentLocation.pathname === nextLocation.pathname) return false;
+      // Переход на страницу выбора сюжета/имени — это естественное продолжение лобби,
+      // а не выход. WS-обработчик `story_phase_started` инициирует такой переход у
+      // нехостов; для них allowNavigationRef ещё не выставлен.
+      if (code && nextLocation.pathname === `/sessions/${code}/stories`) return false;
+      return true;
+    }
   );
 
   useEffect(() => {
@@ -164,20 +168,17 @@ export default function LobbyPage() {
     if (!session) return;
     setStarting(true);
     try {
-      await gameApi.start(session.id);
-      logger.info('game.start_submit', 'Host submitted game start', {
+      // Новый флоу: хост запускает этап сюжета/выбора имён (session.status=waiting).
+      // Фактический старт движка игры (gameApi.start) будет в конце фазы выбора имён.
+      await sessionApi.beginStory(session.id);
+      logger.info('session.begin_story_submit', 'Host submitted begin-story request', {
         sessionId: session.id,
-        withStory,
       }, { sessionId: session.id });
-      // Разрешаем blocker'у пропустить переход в игру — сессию НЕ закрываем.
+      // Разрешаем blocker'у пропустить переход на страницу сюжета — сессию НЕ закрываем.
       allowNavigationRef.current = true;
-      if (withStory) {
-        navigate(`/sessions/${code}/stories`);
-      } else {
-        navigate(`/game/${session.id}`);
-      }
+      navigate(`/sessions/${code}/stories`);
     } catch (err) {
-      logger.warn('api.nonfatal_failure', 'Failed to start game', {
+      logger.warn('api.nonfatal_failure', 'Failed to begin story phase', {
         reason: err instanceof Error ? err.message : String(err),
         sessionId: session.id,
       }, { sessionId: session.id });
@@ -371,21 +372,6 @@ export default function LobbyPage() {
             </Alert>
           )}
 
-          <div className="lobby-settings__section">
-            <h4 className="lobby-settings__section-title">Сюжет</h4>
-            <div className="lobby-settings__toggle-row">
-              <Toggle
-                label="С сюжетом"
-                checked={withStory}
-                onChange={setWithStory}
-              />
-            </div>
-            {withStory && (
-              <p className="lobby-settings__hint">
-                После старта игроки перейдут на страницу выбора сюжета
-              </p>
-            )}
-          </div>
         </div>
       </Modal>
     </div>

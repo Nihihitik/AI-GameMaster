@@ -7,14 +7,11 @@ from schemas.dev import DevLobbyInfo
 from services.audio_manifest import get_manifest as get_audio_manifest
 
 
-def _validate_voiced_name(v: str | None) -> str | None:
-    """Имя игрока должно быть из списка озвученных имён в audio_manifest.
+def _validate_voiced_name_strict(v: str | None) -> str | None:
+    """Строгая валидация: имя обязано быть из списка озвученных имён.
 
-    Если манифест пуст (например, на CI или dev без mp3) — валидация пропускается
-    и допускается None/любая строка (back-compat для тестов).
-
-    Если манифест не пуст — пустое значение или имя вне списка отвергается.
-    Это нужно, чтобы name_pair-склейка озвучки могла найти аудио для имени.
+    Используется при финальном выборе имени (rename после сюжета), где
+    озвучка обязана найти аудио для имени.
     """
     cleaned = strip_name_value(v)
     allowed = get_audio_manifest().display_names()
@@ -29,6 +26,14 @@ def _validate_voiced_name(v: str | None) -> str | None:
             f"Имя должно быть из списка персонажей: {', '.join(allowed)}"
         )
     return cleaned
+
+
+def _strip_optional_name(v: str | None) -> str | None:
+    """Мягкая валидация: просто strip и отдаём. Backend подставит nickname как
+    плейсхолдер при пустом значении. Финальное имя игрок выберет на этапе
+    выбора сюжета (см. RenamePlayerRequest).
+    """
+    return strip_name_value(v)
 
 
 class RoleConfig(BaseModel):
@@ -56,7 +61,7 @@ class CreateSessionRequest(BaseModel):
     @field_validator("host_name")
     @classmethod
     def strip_host_name(cls, v: str | None) -> str | None:
-        return _validate_voiced_name(v)
+        return _strip_optional_name(v)
 
 
 class SessionResponse(BaseModel):
@@ -90,20 +95,39 @@ class SessionDetailResponse(BaseModel):
 
 
 class JoinRequest(BaseModel):
-    """Имя игрока должно быть из списка озвученных имён в audio_manifest."""
+    """Имя игрока — опциональный плейсхолдер; финальное озвученное имя
+    выбирается на странице выбора сюжета (см. RenamePlayerRequest)."""
 
     name: str | None = Field(default=None, max_length=32)
 
     @field_validator("name")
     @classmethod
     def strip_name(cls, v: str | None) -> str | None:
-        return _validate_voiced_name(v)
+        return _strip_optional_name(v)
 
 
 class JoinResponse(BaseModel):
     player_id: str
     session_id: str
     join_order: int
+
+
+class RenamePlayerRequest(BaseModel):
+    """Финальный выбор имени персонажа (после выбора сюжета).
+
+    Имя обязано быть из списка озвученных имён в audio_manifest и уникально
+    среди всех игроков сессии (проверка уникальности — на уровне роутера).
+    """
+
+    name: str = Field(max_length=32)
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str) -> str:
+        cleaned = _validate_voiced_name_strict(v)
+        if not cleaned:
+            raise ValueError("Имя обязательно")
+        return cleaned
 
 
 class UpdateSettingsRequest(BaseModel):

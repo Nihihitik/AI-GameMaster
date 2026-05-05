@@ -28,20 +28,30 @@
     gap: 10px;
   }
 
+  &__logo-btn {
+    border: none;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    border-radius: 10px;
+    transition: transform 0.2s ease, filter 0.2s ease;
+
+    &:hover {
+      transform: scale(1.05);
+      filter: drop-shadow(0 0 12px rgba(200, 30, 30, 0.5));
+    }
+
+    &:active {
+      transform: scale(0.96);
+    }
+  }
+
   &__logo {
     width: 40px;
     height: 40px;
     border-radius: 10px;
     object-fit: contain;
-  }
-
-  &__title {
-    font-size: 22px;
-    font-weight: 800;
-    color: #c81e1e;
-    letter-spacing: 1px;
-    font-family: 'Inter', 'Segoe UI', Roboto, sans-serif;
-    text-shadow: 0 0 20px rgba(200, 30, 30, 0.4);
+    display: block;
   }
 
   &__profile {
@@ -81,7 +91,7 @@
 
 .home-hero {
   width: 100%;
-  margin-bottom: 24px;
+  margin-bottom: 16px;
   border-radius: 16px;
   overflow: hidden;
   position: relative;
@@ -118,35 +128,70 @@
   }
 }
 
-.home-tagline {
-  text-align: center;
-  margin-bottom: 28px;
-
-  &__title {
-    font-size: 20px;
-    font-weight: 700;
-    color: rgba(255, 255, 255, 0.85);
-    margin: 0 0 8px;
-  }
-
-  &__subtitle {
-    font-size: 14px;
-    color: rgba(255, 255, 255, 0.35);
-    margin: 0;
-    line-height: 1.5;
-  }
-}
-
 .home-actions {
   display: flex;
   flex-direction: column;
   gap: 0;
   width: 100%;
-  margin-top: auto;
 
   &__spacer {
     height: 12px;
   }
+}
+
+.home-test-lobby {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(200, 30, 30, 0.35);
+  background: rgba(20, 6, 6, 0.85);
+  backdrop-filter: blur(8px);
+  color: rgba(255, 255, 255, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 20;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  transition: all 0.25s ease;
+  padding: 0;
+
+  &:hover:not(:disabled) {
+    border-color: #c81e1e;
+    color: #ff6666;
+    transform: scale(1.08);
+    box-shadow: 0 6px 22px rgba(200, 30, 30, 0.35);
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.94);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: progress;
+  }
+
+  svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  &__spinner {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #ff6666;
+    animation: home-test-lobby-spin 0.8s linear infinite;
+  }
+}
+
+@keyframes home-test-lobby-spin {
+  to { transform: rotate(360deg); }
 }
 
 .home-join-btn {

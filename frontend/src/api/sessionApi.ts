@@ -26,6 +26,15 @@ export const sessionApi = {
   leave: (sessionId: string) =>
     httpClient.delete(`/sessions/${sessionId}/players/me`),
 
+  setMyName: (sessionId: string, name: string) =>
+    httpClient.patch<{ player_id: string; name: string }>(
+      `/sessions/${sessionId}/players/me/name`,
+      { name },
+    ),
+
+  beginStory: (sessionId: string) =>
+    httpClient.post<{ ok: boolean }>(`/sessions/${sessionId}/begin-story`),
+
   kick: (sessionId: string, playerId: string, confirm?: boolean) =>
     httpClient.delete(`/sessions/${sessionId}/players/${playerId}`, {
       params: confirm !== undefined ? { confirm } : undefined,

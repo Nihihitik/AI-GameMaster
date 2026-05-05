@@ -170,6 +170,12 @@
       background: rgba(200, 30, 30, 0.15);
       color: #ff4444;
     }
+
+    &--maniac {
+      background: #000000;
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+    }
   }
 
   &__desc {

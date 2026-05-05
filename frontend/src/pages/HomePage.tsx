@@ -5,8 +5,6 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Alert from '../components/ui/Alert';
 import SessionSettingsForm from '../components/session/SessionSettingsForm';
-import CharacterNameSelect from '../components/audio/CharacterNameSelect';
-import { sessionApi } from '../api/sessionApi';
 import { useSessionStore, getSpecialRolesCount } from '../stores/sessionStore';
 import { useAuthStore } from '../stores/authStore';
 import { RoleConfig, SessionSettings } from '../types/game';
@@ -28,21 +26,15 @@ export default function HomePage() {
   const [upgrading, setUpgrading] = useState(false);
   const [upgradeError, setUpgradeError] = useState('');
   const [joinCode, setJoinCode] = useState('');
-  const [joinName, setJoinName] = useState('');
   const [joinError, setJoinError] = useState('');
-  const [joinStep, setJoinStep] = useState<'code' | 'name'>('code');
   const [creating, setCreating] = useState(false);
   const [creatingTestLobby, setCreatingTestLobby] = useState(false);
   const [joining, setJoining] = useState(false);
   const [createError, setCreateError] = useState('');
-  // Имена, занятые другими игроками найденной по коду сессии (для disabled).
-  const [joinOccupiedNames, setJoinOccupiedNames] = useState<string[]>([]);
 
   const [playerCount, setPlayerCount] = useState(8);
   const [createSettings, setCreateSettings] = useState(() => createDefaultSessionSettings());
-  const [hostName, setHostName] = useState('');
 
-  const user = useAuthStore((s) => s.user);
   const navigate = useNavigate();
   usePageViewLogger('HomePage');
 
@@ -59,7 +51,6 @@ export default function HomePage() {
 
   const handleOpenCreate = () => {
     setCreateError('');
-    setHostName(user?.nickname ?? '');
     setShowCreateModal(true);
   };
 
@@ -72,14 +63,14 @@ export default function HomePage() {
     setCreating(true);
     setCreateError('');
     try {
-      const trimmedHostName = hostName.trim();
+      // Имя не передаём — backend использует display_name как плейсхолдер.
+      // Финальное имя игрок выберет на странице сюжета.
       logger.info('session.create_submit', 'Submitting session creation request', {
         playerCount,
       });
       const code = await useSessionStore.getState().createSession({
         player_count: playerCount,
         settings: createSettings,
-        host_name: trimmedHostName || undefined,
       });
       setShowCreateModal(false);
       navigate(`/sessions/${code}`);
@@ -116,26 +107,8 @@ export default function HomePage() {
   };
 
   const handleJoinSubmit = async () => {
-    if (joinStep === 'code') {
-      if (joinCode.trim().length < 4) {
-        setJoinError('Введите корректный код сессии');
-        return;
-      }
-      setJoinError('');
-      // Подтягиваем список игроков заранее, чтобы dropdown подсветил занятые имена.
-      try {
-        const detail = await sessionApi.getByCode(joinCode.trim().toUpperCase());
-        setJoinOccupiedNames(detail.data.players.map((p) => p.name));
-      } catch (err) {
-        // Не критично — пусть пользователь выберет, бэк отвалит при коллизии.
-        setJoinOccupiedNames([]);
-      }
-      setJoinStep('name');
-      return;
-    }
-
-    if (joinName.trim().length < 1) {
-      setJoinError('Выберите имя персонажа');
+    if (joinCode.trim().length < 4) {
+      setJoinError('Введите корректный код сессии');
       return;
     }
 
@@ -143,14 +116,13 @@ export default function HomePage() {
     setJoining(true);
     setJoinError('');
     try {
+      // Имя не передаём — backend использует display_name как плейсхолдер.
       logger.info('session.join_submit', 'Submitting join session request', {
         code: normalizedCode,
       });
-      await useSessionStore.getState().joinSession(normalizedCode, joinName.trim());
+      await useSessionStore.getState().joinSession(normalizedCode);
       setShowJoinModal(false);
       setJoinCode('');
-      setJoinName('');
-      setJoinStep('code');
       setJoinError('');
       navigate(`/sessions/${normalizedCode}`);
     } catch (err) {
@@ -167,10 +139,7 @@ export default function HomePage() {
   const handleCloseJoinModal = () => {
     setShowJoinModal(false);
     setJoinCode('');
-    setJoinName('');
-    setJoinStep('code');
     setJoinError('');
-    setJoinOccupiedNames([]);
   };
 
   const handleCloseCreateModal = () => {
@@ -202,8 +171,14 @@ export default function HomePage() {
     <div className="home-page">
       <header className="home-header">
         <div className="home-header__left">
-          <img src="/img/logo.png" alt="Logo" className="home-header__logo" />
-          <span className="home-header__title">MafiaMaster</span>
+          <button
+            type="button"
+            className="home-header__logo-btn"
+            aria-label="На главную"
+            onClick={() => navigate('/')}
+          >
+            <img src="/img/logo.png" alt="Logo" className="home-header__logo" />
+          </button>
         </div>
         <button className="home-header__profile" aria-label="Профиль" onClick={() => navigate('/profile')}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -222,20 +197,8 @@ export default function HomePage() {
           />
         </div>
 
-        <div className="home-tagline">
-          <h2 className="home-tagline__title">Город засыпает. Мафия просыпается.</h2>
-          <p className="home-tagline__subtitle">
-            Создайте сессию и пригласите друзей для захватывающей партии в Мафию с AI-ведущим
-          </p>
-        </div>
-
         <div className="home-actions">
           <Button onClick={handleOpenCreate}>Создать сессию</Button>
-          {APP_ENV === 'development' && (
-            <Button onClick={handleCreateTestLobby} disabled={creatingTestLobby} loading={creatingTestLobby}>
-              Создать тестовое лобби
-            </Button>
-          )}
           <div className="home-actions__spacer" />
           <button className="home-join-btn" onClick={() => setShowJoinModal(true)}>
             <span className="home-join-btn__glow" />
@@ -244,42 +207,48 @@ export default function HomePage() {
             </span>
           </button>
         </div>
+        {APP_ENV === 'development' && (
+          <button
+            type="button"
+            className="home-test-lobby"
+            aria-label="Создать тестовое лобби"
+            title="Создать тестовое лобби"
+            onClick={handleCreateTestLobby}
+            disabled={creatingTestLobby}
+          >
+            {creatingTestLobby ? (
+              <span className="home-test-lobby__spinner" aria-hidden />
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+              </svg>
+            )}
+          </button>
+        )}
         {createError && <Alert variant="error" compact>{createError}</Alert>}
       </main>
 
       <Modal
         isOpen={showJoinModal}
         onClose={handleCloseJoinModal}
-        title={joinStep === 'code' ? 'Введите код' : 'Ваше имя'}
+        title="Введите код"
       >
         <div className="join-modal">
-          {joinStep === 'code' ? (
-            <div className="join-modal__field">
-              <p className="join-modal__hint">Введите код сессии, полученный от организатора</p>
-              <Input
-                label="Код сессии"
-                value={joinCode}
-                onChange={(v) => setJoinCode(v.toUpperCase())}
-                error={joinError}
-              />
-            </div>
-          ) : (
-            <div className="join-modal__field">
-              <p className="join-modal__hint">Выберите персонажа из списка озвученных имён</p>
-              <CharacterNameSelect
-                value={joinName}
-                onChange={setJoinName}
-                occupiedNames={joinOccupiedNames}
-                error={joinError}
-              />
-            </div>
-          )}
+          <div className="join-modal__field">
+            <p className="join-modal__hint">Введите код сессии, полученный от организатора</p>
+            <Input
+              label="Код сессии"
+              value={joinCode}
+              onChange={(v) => setJoinCode(v.toUpperCase())}
+              error={joinError}
+            />
+          </div>
           <div className="join-modal__actions">
             <Button
               onClick={handleJoinSubmit}
-              disabled={joining || (joinStep === 'name' && joinName.trim().length === 0)}
+              disabled={joining || joinCode.trim().length === 0}
             >
-              {joining ? 'Загрузка...' : joinStep === 'code' ? 'Далее' : 'Присоединиться'}
+              {joining ? 'Загрузка...' : 'Присоединиться'}
             </Button>
           </div>
         </div>
@@ -291,14 +260,6 @@ export default function HomePage() {
         title="Создать сессию"
       >
         <div className="create-modal">
-          <div className="create-modal__section">
-            <h4 className="create-modal__section-title">Твой персонаж</h4>
-            <CharacterNameSelect
-              value={hostName}
-              onChange={setHostName}
-            />
-          </div>
-
           <SessionSettingsForm
             settings={createSettings}
             onChangeTimers={updateTimers}
@@ -311,10 +272,7 @@ export default function HomePage() {
           {createError && <Alert variant="error">{createError}</Alert>}
 
           <div className="create-modal__actions">
-            <Button
-              onClick={handleConfirmCreate}
-              disabled={creating || hostName.trim().length === 0}
-            >
+            <Button onClick={handleConfirmCreate} disabled={creating}>
               {creating ? 'Создание...' : 'Создать'}
             </Button>
           </div>

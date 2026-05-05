@@ -1,205 +1,185 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import Button from '../components/ui/Button';
-import Checkbox from '../components/ui/Checkbox';
 import Badge from '../components/ui/Badge';
+import Alert from '../components/ui/Alert';
 import Timer from '../components/ui/Timer';
-import WaitingBlock from '../components/ui/WaitingBlock';
 import GameScreenHeader from '../components/game/GameScreenHeader';
 import { useSessionStore } from '../stores/sessionStore';
-import { mockStories } from '../mocks/sessionMocks';
-import { useCountdown } from '../hooks/useCountdown';
+import { useGameStore } from '../stores/gameStore';
+import audioManifest from '../data/audioManifest.json';
+import type { CharacterNameOption } from '../components/audio/CharacterNameSelect';
+import { getCharacterDescription } from '../utils/characterDescriptions';
 import { logger } from '../services/logger';
 import { usePageViewLogger } from '../hooks/usePageViewLogger';
+import { getApiErrorMessage } from '../utils/getApiErrorMessage';
+import { gameApi } from '../api/gameApi';
+import { wsClient } from '../api/wsClient';
 import './StorySelectionPage.scss';
 
-type Phase = 'voting' | 'waiting' | 'revealing' | 'done';
+type Phase = 'story' | 'name-pick';
+
+const CLASSIC_STORY = {
+  id: 'classic',
+  title: 'Классический',
+  description: 'Базовый режим Мафии без дополнительного сюжета.',
+};
+
+const NAMES: CharacterNameOption[] = (audioManifest as any).names ?? [];
+
+const STORY_DISPLAY_MS = 2500;
+const NAME_PICK_DURATION_SECONDS = 60;
 
 export default function StorySelectionPage() {
   const navigate = useNavigate();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [votes, setVotes] = useState<Record<string, number>>({});
-  const [votedCount, setVotedCount] = useState(0);
-  const [phase, setPhase] = useState<Phase>('voting');
-  const [revealIndex, setRevealIndex] = useState(0);
-  const [winnerStory, setWinnerStory] = useState<typeof mockStories[0] | null>(null);
+  const { code } = useParams<{ code: string }>();
+  const [phase, setPhase] = useState<Phase>('story');
+  const [pendingName, setPendingName] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [nameTimer, setNameTimer] = useState<number>(NAME_PICK_DURATION_SECONDS);
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const session = useSessionStore((s) => s.session);
   const players = useSessionStore((s) => s.players);
-  const timerPaused = useSessionStore((s) => s.timerPaused);
+  const myPlayerId = useSessionStore((s) => s.myPlayerId);
+  const isHost = useSessionStore((s) => s.isHost);
   const setSelectedStory = useSessionStore((s) => s.setSelectedStory);
+  const setMyName = useSessionStore((s) => s.setMyName);
+  const loadByCode = useSessionStore((s) => s.loadByCode);
+  const myRole = useGameStore((s) => s.myRole);
 
-  const total = players.length || 8;
   usePageViewLogger('StorySelectionPage', { sessionId: session?.id ?? null });
-  const hasAutoConfirmedRef = useRef(false);
-  const timeLeft = useCountdown({
-    enabled: phase === 'voting',
-    paused: timerPaused,
-    fallbackSeconds: 60,
-    timerSeconds: null,
-    timerStartedAt: null,
-    resetKey: phase,
-  });
 
+  const navigatingRef = useRef(false);
+  const autoStartedRef = useRef(false);
+
+  // Если попали сюда без предварительного хэндшейка (прямой URL / релоад) — подтягиваем
+  // сессию по коду, чтобы players/myPlayerId были доступны для выбора имени.
   useEffect(() => {
-    if (phase !== 'voting' || timerPaused || timeLeft > 0 || hasAutoConfirmedRef.current) {
+    if (!code) return;
+    if (session) {
+      // Сессия уже подгружена (из LobbyPage). Просто убеждаемся, что WS подключён.
+      wsClient.connect(session.id);
       return;
     }
+    loadByCode(code)
+      .then(() => {
+        const loaded = useSessionStore.getState().session;
+        if (loaded) wsClient.connect(loaded.id);
+      })
+      .catch((err) => {
+        logger.warn('api.nonfatal_failure', 'Failed to hydrate story page session', {
+          reason: err instanceof Error ? err.message : String(err),
+          code,
+        });
+      });
+  }, [code, session, loadByCode]);
 
-    hasAutoConfirmedRef.current = true;
-    const myVote = selectedId;
-    if (myVote) {
-      setVotes((prev) => ({ ...prev, [myVote]: (prev[myVote] || 0) + 1 }));
-    }
-    setVotedCount(1);
-    setPhase('waiting');
-  }, [phase, selectedId, timeLeft, timerPaused]);
-
+  // Нехост переходит в игру, как только гейм-стор получил мою роль по WS.
   useEffect(() => {
-    if (phase === 'voting' && timeLeft > 0) {
-      hasAutoConfirmedRef.current = false;
-    }
-  }, [phase, timeLeft]);
+    if (!myRole || isHost || !session || navigatingRef.current) return;
+    navigatingRef.current = true;
+    navigate(`/game/${session.id}`);
+  }, [myRole, isHost, session, navigate]);
 
+  // Авто-переход из фазы показа сюжета в выбор имени.
   useEffect(() => {
-    if (phase !== 'waiting') {
+    if (phase !== 'story') return;
+    setSelectedStory(CLASSIC_STORY.id);
+    const t = setTimeout(() => setPhase('name-pick'), STORY_DISPLAY_MS);
+    return () => clearTimeout(t);
+  }, [phase, setSelectedStory]);
+
+  // Таймер фазы выбора имени (локальный, синхронизация не критична — все клиенты
+  // вошли на страницу практически одновременно в ответ на story_phase_started).
+  useEffect(() => {
+    if (phase !== 'name-pick') return;
+    setNameTimer(NAME_PICK_DURATION_SECONDS);
+    const interval = setInterval(() => {
+      setNameTimer((s) => (s <= 0 ? 0 : s - 1));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [phase]);
+
+  // По истечению таймера хост автоматически запускает игру. Нехосты ждут
+  // game_started/role_assigned WS-события.
+  useEffect(() => {
+    if (phase !== 'name-pick') return;
+    if (nameTimer > 0) return;
+    if (!isHost) return;
+    if (autoStartedRef.current) return;
+    autoStartedRef.current = true;
+    void handleStartGame();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nameTimer, phase, isHost]);
+
+  const me = players.find((p) => p.id === myPlayerId) ?? null;
+  const myName = me?.name ?? '';
+  const occupiedByOthers = new Set(
+    players.filter((p) => p.id !== myPlayerId).map((p) => p.name),
+  );
+
+  const handlePickName = async (name: string) => {
+    if (occupiedByOthers.has(name) || name === myName || pendingName !== null) {
       return;
     }
-
-    const mockTimers: ReturnType<typeof setTimeout>[] = [];
-    const remaining = total - votedCount;
-    for (let i = 0; i < remaining; i += 1) {
-      mockTimers.push(
-        setTimeout(() => {
-          setVotedCount((count) => count + 1);
-          const randomStory = mockStories[Math.floor(Math.random() * mockStories.length)];
-          setVotes((prev) => ({
-            ...prev,
-            [randomStory.id]: (prev[randomStory.id] || 0) + 1,
-          }));
-        }, (i + 1) * 1200)
-      );
-    }
-
-    return () => mockTimers.forEach(clearTimeout);
-  }, [phase, total, votedCount]);
-
-  useEffect(() => {
-    if (phase !== 'waiting' || votedCount < total) {
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      const maxVotes = Math.max(...Object.values(votes), 0);
-      let candidates: typeof mockStories;
-
-      if (maxVotes === 0) {
-        candidates = [...mockStories];
-      } else {
-        const winIds = Object.entries(votes)
-          .filter(([, value]) => value === maxVotes)
-          .map(([id]) => id);
-        candidates = mockStories.filter((story) => winIds.includes(story.id));
-      }
-
-      if (candidates.length === 1) {
-        setWinnerStory(candidates[0]);
-        setPhase('done');
-        return;
-      }
-
-      setWinnerStory(candidates[Math.floor(Math.random() * candidates.length)]);
-      setPhase('revealing');
-      setRevealIndex(0);
-    }, 800);
-
-    return () => clearTimeout(timer);
-  }, [phase, total, votedCount, votes]);
-
-  useEffect(() => {
-    if (phase !== 'revealing') return;
-    if (revealIndex < 8) {
-      const timer = setTimeout(() => {
-        setRevealIndex((i) => i + 1);
-      }, 250);
-      return () => clearTimeout(timer);
-    } else {
-      const timer = setTimeout(() => setPhase('done'), 600);
-      return () => clearTimeout(timer);
-    }
-  }, [phase, revealIndex]);
-
-  const handleToggleVote = (storyId: string) => {
-    if (phase !== 'voting') return;
-    if (selectedId === storyId) {
-      setSelectedId(null);
-    } else {
-      setSelectedId(storyId);
-    }
-  };
-
-  const handleConfirmVote = () => {
-    if (phase !== 'voting') return;
-    const myVote = selectedId;
-    logger.info('story.vote_submit', 'Story vote submitted', {
-      sessionId: session?.id,
-      selectedId: myVote,
-    }, { sessionId: session?.id });
-    if (myVote) {
-      setVotes((prev) => ({ ...prev, [myVote]: (prev[myVote] || 0) + 1 }));
-    }
-    setVotedCount(1);
-    setPhase('waiting');
-  };
-
-  const handleContinue = () => {
-    if (winnerStory) {
-      setSelectedStory(winnerStory.id);
-      logger.info('story.selection_completed', 'Story selection completed', {
+    setPendingName(name);
+    setRenameError(null);
+    try {
+      await setMyName(name);
+      logger.info('story.name_picked', 'Player picked name', {
         sessionId: session?.id,
-        storyId: winnerStory.id,
+        name,
       }, { sessionId: session?.id });
-    }
-    if (session?.id) {
-      navigate(`/game/${session.id}`);
-    } else {
-      navigate('/app', { replace: true });
+    } catch (err) {
+      logger.warn('api.nonfatal_failure', 'Set name failed', {
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      setRenameError(getApiErrorMessage(err));
+    } finally {
+      setPendingName(null);
     }
   };
 
-  const randomStoryForReveal = mockStories[revealIndex % mockStories.length];
-  const isVotingPhase = phase === 'voting';
+  const handleStartGame = async () => {
+    if (!session || !isHost) return;
+    setStarting(true);
+    setStartError(null);
+    try {
+      setSelectedStory(CLASSIC_STORY.id);
+      await gameApi.start(session.id);
+      logger.info('story.selection_completed', 'Host started game after story phase', {
+        sessionId: session.id,
+      }, { sessionId: session.id });
+      navigatingRef.current = true;
+      navigate(`/game/${session.id}`);
+    } catch (err) {
+      logger.warn('api.nonfatal_failure', 'Failed to start game', {
+        reason: err instanceof Error ? err.message : String(err),
+        sessionId: session.id,
+      }, { sessionId: session.id });
+      setStartError(getApiErrorMessage(err));
+    } finally {
+      setStarting(false);
+    }
+  };
 
   return (
     <div className="story-page">
       <GameScreenHeader
-        title="Выбор сюжета"
-        showPause={isVotingPhase}
-        pauseSlot={isVotingPhase ? undefined : <span className="story-header__spacer" />}
-        timer={isVotingPhase ? <Timer seconds={timeLeft} dangerThreshold={10} /> : undefined}
-        right={!isVotingPhase ? <div className="story-header__voted">{votedCount}/{total}</div> : undefined}
+        title={phase === 'story' ? 'Сюжет' : 'Выбор персонажа'}
+        showPause={false}
+        pauseSlot={<span className="story-header__spacer" />}
+        timer={phase === 'name-pick' ? <Timer seconds={nameTimer} dangerThreshold={10} /> : undefined}
       />
 
       <main className="story-main">
-        {phase === 'revealing' && (
-          <div className="story-reveal">
-            <p className="story-reveal__label">Выбираем сюжет...</p>
-            <div className="story-reveal__card story-reveal__card--spinning">
-              <div className="story-reveal__placeholder">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
-                  <rect x="3" y="3" width="18" height="18" rx="3" />
-                  <circle cx="12" cy="10" r="3" />
-                  <path d="M6 21v-1a4 4 0 014-4h4a4 4 0 014 4v1" />
-                </svg>
-              </div>
-              <span className="story-reveal__name">{randomStoryForReveal.title}</span>
-            </div>
-          </div>
-        )}
-
-        {phase === 'done' && winnerStory && (
+        {phase === 'story' && (
           <div className="story-result">
-            <Badge variant="default" size="md" className="story-result__badge">Выбранный сюжет</Badge>
+            <Badge variant="default" size="md" className="story-result__badge">
+              Сюжет
+            </Badge>
             <div className="story-result__card">
               <div className="story-result__placeholder">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
@@ -208,61 +188,111 @@ export default function StorySelectionPage() {
                   <path d="M6 21v-1a4 4 0 014-4h4a4 4 0 014 4v1" />
                 </svg>
               </div>
-              <span className="story-result__title">{winnerStory.title}</span>
+              <span className="story-result__title">{CLASSIC_STORY.title}</span>
             </div>
-            <p className="story-result__desc">{winnerStory.description}</p>
-            <Button onClick={handleContinue}>Продолжить</Button>
+            <p className="story-result__desc">{CLASSIC_STORY.description}</p>
           </div>
         )}
 
-        {(phase === 'voting' || phase === 'waiting') && (
-          <>
-            <div className="story-grid">
-              {mockStories.map((story) => (
-                <div
-                  key={story.id}
-                  className={`story-card ${selectedId === story.id ? 'story-card--selected' : ''}`}
-                  onClick={() => handleToggleVote(story.id)}
-                >
-                  <div className="story-card__placeholder">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
-                      <rect x="3" y="3" width="18" height="18" rx="3" />
-                      <circle cx="12" cy="10" r="3" />
-                      <path d="M6 21v-1a4 4 0 014-4h4a4 4 0 014 4v1" />
-                    </svg>
-                  </div>
-                  <div className="story-card__footer">
-                    <span className="story-card__title">{story.title}</span>
-                    <span className="story-card__votes">
-                      {votes[story.id] || 0}/{total}
-                    </span>
-                  </div>
-                  <div className="story-card__check" onClick={(e) => e.stopPropagation()}>
-                    <Checkbox
-                      checked={selectedId === story.id}
-                      onChange={() => handleToggleVote(story.id)}
-                      disabled={phase !== 'voting'}
-                    />
-                  </div>
-                </div>
-              ))}
+        {phase === 'name-pick' && (
+          <div className="story-name-pick">
+            <p className="story-name-pick__hint">
+              Выберите своё имя. Имена используются ведущим в озвучке.
+            </p>
+            <div className="story-name-pick__current">
+              <span className="story-name-pick__current-label">Вы играете как:</span>
+              <span className="story-name-pick__current-name">{myName || '—'}</span>
+            </div>
+            <div className="story-name-pick__grid">
+              {NAMES.map((n) => {
+                const isMine = n.display === myName;
+                const isTaken = occupiedByOthers.has(n.display);
+                const isLoading = pendingName === n.display;
+                const cls = [
+                  'story-name-pick__name',
+                  isMine && 'story-name-pick__name--mine',
+                  isTaken && 'story-name-pick__name--taken',
+                  isLoading && 'story-name-pick__name--loading',
+                ]
+                  .filter(Boolean)
+                  .join(' ');
+                const description = getCharacterDescription(n.display);
+                return (
+                  <button
+                    key={n.display}
+                    type="button"
+                    className={cls}
+                    disabled={isTaken || isLoading || isMine}
+                    onClick={() => handlePickName(n.display)}
+                  >
+                    <div className="story-name-pick__name-head">
+                      <span className="story-name-pick__name-text">{n.display}</span>
+                      <span className="story-name-pick__name-gender">
+                        {n.gender === 'f' ? '♀' : '♂'}
+                      </span>
+                    </div>
+                    {description && (
+                      <p className="story-name-pick__name-desc">{description}</p>
+                    )}
+                  </button>
+                );
+              })}
             </div>
 
-            {phase === 'voting' && (
-              <div className="story-action">
-                <Button onClick={handleConfirmVote}>
-                  {selectedId ? 'Подтвердить выбор' : 'Пропустить голосование'}
-                </Button>
-              </div>
+            {renameError && (
+              <Alert variant="error" compact>
+                {renameError}
+              </Alert>
             )}
 
-            {phase === 'waiting' && (
-              <WaitingBlock text={`Ожидание голосов: ${votedCount}/${total}`} loaderSize={32} />
+            <div className="story-name-pick__players">
+              <h4 className="story-name-pick__players-title">Игроки в лобби</h4>
+              <ul className="story-name-pick__players-list">
+                {players.map((p) => (
+                  <li
+                    key={p.id}
+                    className={`story-name-pick__player${
+                      p.id === myPlayerId ? ' story-name-pick__player--me' : ''
+                    }`}
+                  >
+                    <span className="story-name-pick__player-name">{p.name}</span>
+                    {p.is_host && (
+                      <span className="story-name-pick__player-tag">хост</span>
+                    )}
+                    {p.id === myPlayerId && (
+                      <span className="story-name-pick__player-tag story-name-pick__player-tag--me">вы</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {startError && (
+              <Alert variant="error" compact>
+                {startError}
+              </Alert>
             )}
-          </>
+
+            <div className="story-action">
+              {isHost ? (
+                <Button
+                  onClick={handleStartGame}
+                  disabled={!myName || starting}
+                  loading={starting}
+                >
+                  {starting ? 'Запуск...' : 'Начать игру'}
+                </Button>
+              ) : (
+                <p className="story-name-pick__waiting">
+                  {myName
+                    ? 'Имя выбрано. Ожидание хоста...'
+                    : 'Выберите своё имя'}
+                </p>
+              )}
+            </div>
+          </div>
         )}
       </main>
-
     </div>
   );
 }

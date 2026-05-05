@@ -13,6 +13,7 @@ import Loader from './components/ui/Loader';
 import AppErrorBoundary from './components/app/AppErrorBoundary';
 import { useAuthStore } from './stores/authStore';
 import { prepareAuthStorageFromLocation } from './utils/tokenStorage';
+import { setAppRouter } from './utils/routerRef';
 import { logger } from './services/logger';
 import './App.scss';
 
@@ -62,6 +63,8 @@ const router = createBrowserRouter([
   ...devRoutes,
   { path: '*', element: <Navigate to="/" replace /> },
 ]);
+
+setAppRouter(router);
 
 function AppBootstrap() {
   const initialize = useAuthStore((s) => s.initialize);

@@ -16,7 +16,7 @@ from core.logging import log_event, set_log_context
 from models.game_event import GameEvent
 from models.player import Player
 from models.session import Session
-from schemas.session import PlayerInList, UpdateSettingsRequest
+from schemas.session import PlayerInList, RenamePlayerRequest, UpdateSettingsRequest
 from services.game_engine import apply_host_kick
 from services.lobby_service import handle_player_left
 from services.pause_service import pause_game, resume_game
@@ -50,6 +50,106 @@ async def list_players(
         for p in sorted(players, key=lambda x: x.join_order)
     ]
     return {"players": items}
+
+
+@router.post("/{session_id}/begin-story")
+async def begin_story(
+    session_id: uuid.UUID,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Хост запускает этап выбора сюжета и имён персонажей.
+
+    Не меняет статус сессии (остаётся `waiting`), но рассылает всем клиентам
+    WS-событие `story_phase_started`, чтобы они перешли на страницу сюжета.
+    Фактический старт игры (`gameApi.start`) происходит позже, когда хост
+    завершит фазу выбора имён.
+    """
+    session = await get_session_or_404(db, session_id)
+    require_host(session, current_user.id)
+    if session.status != "waiting":
+        raise GameError(409, "wrong_phase", "Нельзя начать выбор сюжета после старта игры")
+
+    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
+    log_event(
+        logger,
+        logging.INFO,
+        "session.story_phase_started",
+        "Host started story phase",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+    )
+
+    await ws_manager.send_to_session(
+        session_id,
+        {"type": "story_phase_started", "payload": {}},
+    )
+    return {"ok": True}
+
+
+@router.patch("/{session_id}/players/me/name")
+async def rename_my_player(
+    session_id: uuid.UUID,
+    payload: RenamePlayerRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Поменять имя своего игрока на одно из озвученных и уникальных в сессии.
+
+    Используется на странице выбора сюжета: до старта игры каждый игрок
+    финально выбирает себе имя из манифеста, чтобы озвучка работала корректно.
+    """
+    session = await get_session_or_404(db, session_id)
+    if session.status != "waiting":
+        raise GameError(409, "wrong_phase", "Имя можно менять только до старта игры")
+
+    player = await get_player_or_404(db, session_id, current_user.id)
+
+    new_name = payload.name
+    # Уникальность среди других игроков сессии (своё текущее имя — допустимо).
+    conflict = await db.scalar(
+        select(Player).where(
+            Player.session_id == session_id,
+            Player.name == new_name,
+            Player.id != player.id,
+        )
+    )
+    if conflict is not None:
+        raise GameError(409, "name_taken", "Это имя уже занято другим игроком")
+
+    if player.name != new_name:
+        player.name = new_name
+        db.add(
+            GameEvent(
+                id=uuid.uuid4(),
+                session_id=session_id,
+                phase_id=None,
+                event_type="player_renamed",
+                payload={"player_id": str(player.id), "name": new_name},
+            )
+        )
+        await db.commit()
+
+        await ws_manager.send_to_session(
+            session_id,
+            {
+                "type": "player_renamed",
+                "payload": {"player_id": str(player.id), "name": new_name},
+            },
+        )
+
+    set_log_context(session_id=str(session_id), user_id=str(current_user.id))
+    log_event(
+        logger,
+        logging.INFO,
+        "session.player_renamed",
+        "Player renamed",
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+        player_id=str(player.id),
+        new_name=new_name,
+    )
+    return {"player_id": str(player.id), "name": new_name}
 
 
 @router.delete("/{session_id}/players/me", status_code=204)

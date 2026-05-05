@@ -5,7 +5,7 @@ export interface RoleInfo {
   backendName: string;
   displayName: string;
   team: RoleTeam;
-  card: 'Красная карта' | 'Зелёная карта';
+  card: 'Красная карта' | 'Зелёная карта' | 'Чёрная карта';
   image: string;
   description: string;
 }
@@ -76,7 +76,7 @@ export const ROLES: RoleInfo[] = [
     backendName: 'Маньяк',
     displayName: 'Маньяк',
     team: 'maniac',
-    card: 'Красная карта',
+    card: 'Чёрная карта',
     image: '/img/manyak.png',
     description:
       'Просыпается ночью и убивает 1 игрока. Его цель — остаться в живых и довести игру до конца.',

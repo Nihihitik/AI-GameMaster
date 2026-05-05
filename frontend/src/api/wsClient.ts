@@ -5,6 +5,7 @@ import { useGameStore } from '../stores/gameStore';
 import { SessionSettings } from '../types/game';
 import { PlayerInList } from '../types/api';
 import { logger } from '../services/logger';
+import { navigateTo } from '../utils/routerRef';
 
 /**
  * Синглтон WebSocket-клиента для игровой сессии.
@@ -73,6 +74,27 @@ const HANDLERS: Record<string, (payload: unknown) => void> = {
     const playerId = getPayloadString(payload, 'player_id');
     if (playerId) {
       useSessionStore.getState().removePlayer(playerId);
+    }
+  },
+
+  player_renamed: (payload) => {
+    const playerId = getPayloadString(payload, 'player_id');
+    const name = getPayloadString(payload, 'name');
+    if (playerId && name) {
+      useSessionStore.getState().applyPlayerRenamed(playerId, name);
+    }
+  },
+
+  story_phase_started: () => {
+    // Хост запустил этап сюжета/выбора имён — все переходим на страницу сюжета.
+    if (typeof window === 'undefined') return;
+    const code = useSessionStore.getState().session?.code;
+    if (!code) return;
+    const target = `/sessions/${code}/stories`;
+    if (window.location.pathname !== target) {
+      // Client-side навигация без перезагрузки, чтобы Zustand-store с players/myPlayerId
+      // не терялся (full reload ломает выбор имени и таймер).
+      navigateTo(target);
     }
   },
 
