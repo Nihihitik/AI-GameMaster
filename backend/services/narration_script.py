@@ -105,9 +105,10 @@ def game_started_steps(seed_key: str) -> list[dict]:
 
 def all_acknowledged_steps(seed_key: str) -> list[dict]:
     return build_steps(
-        "all_acknowledged",
+        "intro_personality",
         ['Я надеюсь, что все запомнили свои роли, определились со своей "личностью", предлагаю начинать игру!'],
         seed_key,
+        triggers=["intro_personality"],
     )
 
 

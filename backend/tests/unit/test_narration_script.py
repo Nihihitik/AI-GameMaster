@@ -1,4 +1,5 @@
 from services.narration_script import (
+    all_acknowledged_steps,
     day_voting_steps,
     game_finished_steps,
     night_result_steps,
@@ -46,3 +47,10 @@ def test_day_voting_intro_has_single_shared_phrase() -> None:
     assert len(steps) == 1
     assert steps[0]["step_index"] == 1
     assert steps[0]["steps_total"] == 1
+
+
+def test_all_acknowledged_uses_manifest_trigger() -> None:
+    steps = all_acknowledged_steps("session-1:ack")
+
+    assert len(steps) == 1
+    assert steps[0]["trigger"] == "intro_personality"

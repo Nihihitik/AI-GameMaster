@@ -19,6 +19,7 @@ class GameEvent(Base):
         CheckConstraint(
             "event_type IN ("
             "'player_joined', 'player_left', 'game_started', "
+            "'player_renamed', "
             "'role_acknowledged', 'all_acknowledged', 'phase_changed', "
             "'night_action_submitted', 'night_result', 'player_eliminated', "
             "'vote_cast', 'vote_result', 'game_finished', 'session_closed'"
@@ -45,4 +46,3 @@ class GameEvent(Base):
 
     session: Mapped["Session"] = relationship(back_populates="events")
     phase: Mapped["GamePhase | None"] = relationship()
-

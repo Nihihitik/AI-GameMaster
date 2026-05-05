@@ -6,11 +6,42 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MANIFEST_PATH = REPO_ROOT / "audio_manifest.json"
+MANIFEST_FILE_NAME = "audio_manifest.json"
+logger = logging.getLogger(__name__)
+
+
+def _default_manifest_path(module_file: Path | None = None) -> Path:
+    """Find the manifest in both local repo and Docker layouts."""
+    source = (module_file or Path(__file__)).resolve()
+    candidates = [
+        source.parents[1] / MANIFEST_FILE_NAME,  # /app/audio_manifest.json in Docker
+        source.parents[2] / MANIFEST_FILE_NAME,  # repo root when running from backend/
+    ]
+    for path in candidates:
+        try:
+            if path.is_file() and path.stat().st_size > 0:
+                return path
+        except OSError:
+            continue
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
+
+def manifest_path() -> Path:
+    override = os.getenv("AUDIO_MANIFEST_PATH")
+    if override:
+        return Path(override).expanduser()
+    return _default_manifest_path()
+
+
+MANIFEST_PATH = manifest_path()
 
 
 @dataclass(slots=True, frozen=True)
@@ -76,10 +107,16 @@ _cached: AudioManifest | None = None
 
 
 def _load_from_disk() -> AudioManifest:
-    if not MANIFEST_PATH.exists():
+    path = manifest_path()
+    if not path.exists():
+        logger.warning("audio_manifest.missing", extra={"path": str(path)})
         # пустой манифест — вся озвучка fallback'ится на typewriter без аудио
         return AudioManifest(version="empty", names=[], triggers={})
-    raw = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        logger.exception("audio_manifest.invalid_json", extra={"path": str(path)})
+        return AudioManifest(version="invalid", names=[], triggers={})
     names = [
         NameAudio(
             slug=n["slug"],

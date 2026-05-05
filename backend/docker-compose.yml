@@ -36,6 +36,7 @@ services:
       CORS_ORIGINS: http://localhost:3000,http://localhost:3100,http://localhost:5173
       APP_ENV: development
       LOG_LEVEL: DEBUG
+      AUDIO_MANIFEST_PATH: /audio_manifest.json
       PYTHONUNBUFFERED: "1"
       FRONTEND_LOG_INGEST_ENABLED: "true"
       # Включает /api/observability/* для logs-frontend dashboard (без auth, dev only)
@@ -45,6 +46,7 @@ services:
     # Bind-mount для горячей перезагрузки uvicorn --reload
     volumes:
       - .:/app
+      - ../audio_manifest.json:/audio_manifest.json:ro
     # Применяем миграции перед стартом — иначе recovery_loop падает на отсутствующих таблицах
     command: >
       sh -c "uv run alembic upgrade head &&
