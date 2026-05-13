@@ -26,6 +26,7 @@ from models.player import Player
 from models.role import Role
 from models.session import Session
 from services.game_engine import acknowledge_role, get_current_phase, resolve_votes, start_game, transition_to_voting
+from services.audio_preload import clear_audio_preload
 from services.recovery_service import recover_missing_phase
 from services.runtime_state import runtime_state
 from services.timer_service import timer_service
@@ -709,7 +710,7 @@ async def reset_to_lobby(
     session.status = "waiting"
     session.ended_at = None
     session.host_user_id = current_user.id  # я теперь хост
-    cur = dict(session.settings or {})
+    cur = clear_audio_preload(session.settings)
     cur.pop("game_pause", None)
     session.settings = cur
 

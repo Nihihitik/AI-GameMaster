@@ -130,6 +130,10 @@ class RenamePlayerRequest(BaseModel):
         return cleaned
 
 
+class AudioPreloadReadyRequest(BaseModel):
+    manifest_version: str
+
+
 class UpdateSettingsRequest(BaseModel):
     role_reveal_timer_seconds: int | None = Field(default=None, ge=10, le=30)
     discussion_timer_seconds: int | None = Field(default=None, ge=30, le=300)

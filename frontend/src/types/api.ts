@@ -118,6 +118,19 @@ export interface UpdateSettingsResponse {
   settings: SessionSettings;
 }
 
+export interface AudioPreloadStatusResponse {
+  manifest_version: string;
+  required: boolean;
+  audio_count: number;
+  ready_count: number;
+  players_total: number;
+  ready_player_ids: string[];
+}
+
+export interface AudioPreloadReadyRequest {
+  manifest_version: string;
+}
+
 export interface ActivateDevPlayerRequest {
   code: string;
   player_slug: string;

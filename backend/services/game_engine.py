@@ -45,6 +45,7 @@ from services.narration_script import (
 )
 from services.narration_audio import resolve_steps
 from services.audio_manifest import get_manifest as get_audio_manifest
+from services.audio_preload import ensure_audio_preload_ready
 from services.timer_service import timer_service
 from services.runtime_state import runtime_state
 from services.ws_manager import ws_manager
@@ -272,6 +273,7 @@ async def check_win_condition(db: AsyncSession, session_id: uuid.UUID) -> str | 
 async def start_game(db: AsyncSession, session: Session) -> None:
     if session.status != "waiting":
         raise GameError(409, "game_already_started", "Игра уже началась")
+    await ensure_audio_preload_ready(db, session)
 
     players = (await db.scalars(select(Player).where(Player.session_id == session.id))).all()
     role_cfg = (session.settings or {}).get("role_config") or {}

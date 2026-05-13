@@ -3,7 +3,7 @@ import { useAuthStore } from '../stores/authStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useGameStore } from '../stores/gameStore';
 import { SessionSettings } from '../types/game';
-import { PlayerInList } from '../types/api';
+import { AudioPreloadStatusResponse, PlayerInList } from '../types/api';
 import { logger } from '../services/logger';
 import { navigateTo } from '../utils/routerRef';
 
@@ -111,6 +111,12 @@ const HANDLERS: Record<string, (payload: unknown) => void> = {
       return;
     }
     void sessionStore.setSettings(settings as Partial<SessionSettings>);
+  },
+
+  audio_preload_ready: (payload) => {
+    if (isPayloadRecord(payload)) {
+      useSessionStore.getState().setAudioPreloadStatus(payload as unknown as AudioPreloadStatusResponse);
+    }
   },
 
   session_closed: () => {

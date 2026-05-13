@@ -5,6 +5,7 @@ import type {
   PlayerInList,
   SessionDetailResponse,
   UpdateSettingsRequest,
+  AudioPreloadStatusResponse,
 } from '../types/api';
 import { sessionApi } from '../api/sessionApi';
 import { useAuthStore } from './authStore';
@@ -35,6 +36,7 @@ interface SessionState {
   withStory: boolean;
   selectedStoryId: string | null;
   timerPaused: boolean;
+  audioPreloadStatus: AudioPreloadStatusResponse | null;
 
   // API-backed actions
   createSession: (data: CreateSessionRequest) => Promise<string>;
@@ -50,6 +52,7 @@ interface SessionState {
   applySessionSettings: (settings: SessionSettings) => void;
   applyHostTransfer: (newHostUserId: string, newHostPlayerId?: string | null) => void;
   applyPlayerRenamed: (playerId: string, name: string) => void;
+  setAudioPreloadStatus: (status: AudioPreloadStatusResponse | null) => void;
 
   // API: переименование своего игрока (этап выбора имени после сюжета).
   setMyName: (name: string) => Promise<void>;
@@ -89,6 +92,7 @@ function stateFromSessionDetail(detailData: SessionDetailResponse) {
     settings: detailData.settings,
     isHost: currentUser ? detailData.host_user_id === currentUser.user_id : false,
     myPlayerId: myPlayer?.id ?? null,
+    audioPreloadStatus: null,
   };
 }
 
@@ -102,6 +106,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   withStory: false,
   selectedStoryId: null,
   timerPaused: false,
+  audioPreloadStatus: null,
 
   createSession: async (data) => {
     const response = await sessionApi.create(data);
@@ -236,6 +241,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }));
   },
 
+  setAudioPreloadStatus: (status) => {
+    set({ audioPreloadStatus: status });
+  },
+
   setMyName: async (name) => {
     const state = get();
     if (!state.session) return;
@@ -316,6 +325,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       withStory: false,
       selectedStoryId: null,
       timerPaused: false,
+      audioPreloadStatus: null,
     });
   },
 }));

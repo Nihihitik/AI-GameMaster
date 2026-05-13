@@ -351,6 +351,41 @@
     }
   }
 
+  &__audio {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  &__audio-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: rgba(255, 255, 255, 0.56);
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__audio-track {
+    height: 4px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.08);
+
+    span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: #c81e1e;
+      transition: width 0.25s ease;
+    }
+  }
+
   &__grid {
     display: flex;
     flex-direction: column;

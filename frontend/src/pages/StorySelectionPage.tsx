@@ -14,7 +14,15 @@ import { logger } from '../services/logger';
 import { usePageViewLogger } from '../hooks/usePageViewLogger';
 import { getApiErrorMessage } from '../utils/getApiErrorMessage';
 import { gameApi } from '../api/gameApi';
+import { sessionApi } from '../api/sessionApi';
 import { wsClient } from '../api/wsClient';
+import {
+  AUDIO_PRELOAD_MANIFEST_VERSION,
+  getAudioPreloadProgress,
+  preloadNarrationAudio,
+  subscribeAudioPreload,
+  type AudioPreloadProgress,
+} from '../utils/audioPreloader';
 import './StorySelectionPage.scss';
 
 type Phase = 'story' | 'name-pick';
@@ -39,11 +47,16 @@ export default function StorySelectionPage() {
   const [nameTimer, setNameTimer] = useState<number>(NAME_PICK_DURATION_SECONDS);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const [audioPreloadProgress, setAudioPreloadProgress] = useState<AudioPreloadProgress>(() =>
+    getAudioPreloadProgress()
+  );
 
   const session = useSessionStore((s) => s.session);
   const players = useSessionStore((s) => s.players);
   const myPlayerId = useSessionStore((s) => s.myPlayerId);
   const isHost = useSessionStore((s) => s.isHost);
+  const audioPreloadStatus = useSessionStore((s) => s.audioPreloadStatus);
+  const setAudioPreloadStatus = useSessionStore((s) => s.setAudioPreloadStatus);
   const setSelectedStory = useSessionStore((s) => s.setSelectedStory);
   const setMyName = useSessionStore((s) => s.setMyName);
   const loadByCode = useSessionStore((s) => s.loadByCode);
@@ -102,17 +115,79 @@ export default function StorySelectionPage() {
     return () => clearInterval(interval);
   }, [phase]);
 
+  useEffect(() => {
+    if (!session) return;
+
+    let cancelled = false;
+    const unsubscribe = subscribeAudioPreload(setAudioPreloadProgress);
+
+    sessionApi.getAudioPreloadStatus(session.id)
+      .then((response) => {
+        if (!cancelled) {
+          setAudioPreloadStatus(response.data);
+        }
+      })
+      .catch((err) => {
+        logger.warn('api.nonfatal_failure', 'Failed to load audio preload status', {
+          reason: err instanceof Error ? err.message : String(err),
+          sessionId: session.id,
+        }, { sessionId: session.id });
+      });
+
+    preloadNarrationAudio()
+      .then(async (result) => {
+        if (cancelled || result.failed > 0) return;
+        const response = await sessionApi.markAudioPreloadReady(session.id, {
+          manifest_version: AUDIO_PRELOAD_MANIFEST_VERSION,
+        });
+        if (!cancelled) {
+          setAudioPreloadStatus(response.data);
+        }
+      })
+      .catch((err) => {
+        logger.warn('api.nonfatal_failure', 'Audio preload failed', {
+          reason: err instanceof Error ? err.message : String(err),
+          sessionId: session.id,
+        }, { sessionId: session.id });
+      });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [players.length, session, setAudioPreloadStatus]);
+
+  const audioPlayersTotal = audioPreloadStatus?.players_total ?? players.length;
+  const audioReadyCount = audioPreloadStatus?.ready_count ?? 0;
+  const localAudioReady = audioPreloadProgress.done && audioPreloadProgress.failed === 0;
+  const audioReadyForGame = audioPreloadStatus
+    ? localAudioReady && (!audioPreloadStatus.required || audioReadyCount >= audioPlayersTotal)
+    : audioPreloadProgress.total === 0;
+  const audioProgressTotal = Math.max(1, audioPreloadProgress.total);
+  const audioPreloadPercent = Math.min(
+    100,
+    Math.round(((audioPreloadProgress.loaded + audioPreloadProgress.failed) / audioProgressTotal) * 100),
+  );
+  const audioStatusText = audioPreloadProgress.failed > 0
+    ? `Ошибка загрузки озвучки: ${audioPreloadProgress.failed}`
+    : !localAudioReady
+      ? `Загрузка озвучки ${audioPreloadProgress.loaded}/${audioPreloadProgress.total}`
+      : audioReadyForGame
+        ? `Озвучка готова ${audioReadyCount}/${audioPlayersTotal}`
+        : `Ожидание игроков ${audioReadyCount}/${audioPlayersTotal}`;
+
   // По истечению таймера хост автоматически запускает игру. Нехосты ждут
   // game_started/role_assigned WS-события.
   useEffect(() => {
     if (phase !== 'name-pick') return;
     if (nameTimer > 0) return;
     if (!isHost) return;
+    if (!audioReadyForGame) return;
     if (autoStartedRef.current) return;
     autoStartedRef.current = true;
     void handleStartGame();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nameTimer, phase, isHost]);
+  }, [audioReadyForGame, nameTimer, phase, isHost]);
 
   const me = players.find((p) => p.id === myPlayerId) ?? null;
   const myName = me?.name ?? '';
@@ -144,6 +219,7 @@ export default function StorySelectionPage() {
 
   const handleStartGame = async () => {
     if (!session || !isHost) return;
+    if (!audioReadyForGame) return;
     setStarting(true);
     setStartError(null);
     try {
@@ -202,6 +278,15 @@ export default function StorySelectionPage() {
             <div className="story-name-pick__current">
               <span className="story-name-pick__current-label">Вы играете как:</span>
               <span className="story-name-pick__current-name">{myName || '—'}</span>
+            </div>
+            <div className="story-name-pick__audio">
+              <div className="story-name-pick__audio-row">
+                <span>{audioStatusText}</span>
+                <span>{audioPreloadPercent}%</span>
+              </div>
+              <div className="story-name-pick__audio-track">
+                <span style={{ width: `${audioPreloadPercent}%` }} />
+              </div>
             </div>
             <div className="story-name-pick__grid">
               {NAMES.map((n) => {
@@ -277,14 +362,22 @@ export default function StorySelectionPage() {
               {isHost ? (
                 <Button
                   onClick={handleStartGame}
-                  disabled={!myName || starting}
+                  disabled={!myName || starting || !audioReadyForGame || audioPreloadProgress.failed > 0}
                   loading={starting}
                 >
-                  {starting ? 'Запуск...' : 'Начать игру'}
+                  {starting
+                    ? 'Запуск...'
+                    : audioPreloadProgress.failed > 0
+                      ? 'Ошибка загрузки озвучки'
+                      : !audioReadyForGame
+                        ? audioStatusText
+                        : 'Начать игру'}
                 </Button>
               ) : (
                 <p className="story-name-pick__waiting">
-                  {myName
+                  {!audioReadyForGame
+                    ? audioStatusText
+                    : myName
                     ? 'Имя выбрано. Ожидание хоста...'
                     : 'Выберите своё имя'}
                 </p>
