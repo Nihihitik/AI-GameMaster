@@ -209,22 +209,79 @@ async def _play_phase_announcements(
     persist: bool = False,
     target_player_name: str | None = None,
 ) -> None:
+    """Прокручивает announcement'ы фазы.
+
+    #8: раньше каждый announcement делал отдельный commit (для 5-шаговой фазы —
+    5 round-trip'ов в БД). Теперь WS-сообщения отправляются сразу, а GameEvent'ы
+    копятся и пишутся одним commit'ом в конце цикла.
+
+    Trade-off: если backend упадёт между WS-сообщением и финальным commit'ом,
+    /state у переподключившегося клиента покажет более ранний announcement
+    (последний committed). Клиент быстро догонит из следующего phase_changed —
+    допустимое compromise за -80% latency на старте каждой фазы.
+    """
     target_gender = _gender_for_name(target_player_name)
     enriched = resolve_steps(
         steps,
         target_player_name=target_player_name,
         target_player_gender=target_gender,
     )
+    should_persist = persist and db is not None and phase_id is not None
+    pending_events: list[GameEvent] = []
     for announcement in enriched:
-        await _emit_phase_changed(
-            session_id,
-            {**phase_payload, "announcement": announcement},
-            db=db,
-            phase_id=phase_id,
-            persist=persist and db is not None and phase_id is not None,
-        )
+        full_payload = {**phase_payload, "announcement": announcement}
+        # Эмитим WS без commit'а — persist=False даже если общий флаг True.
+        # Сам phase_changed-event добавим в pending_events ниже после возможного
+        # stamp'а started_at (он делается внутри _emit_phase_changed).
+        emitted_payload = await _emit_phase_changed_for_batch(session_id, full_payload)
+        if should_persist:
+            pending_events.append(
+                GameEvent(
+                    id=uuid.uuid4(),
+                    session_id=session_id,
+                    phase_id=phase_id,
+                    event_type="phase_changed",
+                    payload=emitted_payload,
+                )
+            )
         await _wait_or_pause(session_id, _wait_seconds_for(announcement))
+    # ONE commit вместо N — главное ускорение #8.
+    if pending_events and db is not None:
+        db.add_all(pending_events)
+        await db.commit()
     await _set_runtime_announcement(session_id, None)
+
+
+async def _emit_phase_changed_for_batch(
+    session_id: uuid.UUID,
+    payload: dict,
+) -> dict:
+    """Версия `_emit_phase_changed` без db.commit() — для batch-режима в #8.
+
+    Делает то же что и `_emit_phase_changed(... persist=False)`: трансформирует
+    payload (стамп started_at, обновление runtime announcement), отправляет WS,
+    логирует. Возвращает трансформированный payload, чтобы вызывающий мог
+    собрать GameEvent для batch INSERT'а.
+    """
+    announcement = payload.get("announcement")
+    is_blocking = bool(announcement and announcement.get("blocking", True))
+    stamped = await _set_runtime_announcement(session_id, announcement if is_blocking else None)
+    if announcement and not is_blocking:
+        stamped = _stamp_started_at(announcement)
+    if stamped is not None:
+        payload = {**payload, "announcement": stamped}
+    log_event(
+        logger,
+        logging.INFO,
+        "phase.changed",
+        "Game phase changed",
+        session_id=str(session_id),
+        phase=payload.get("phase"),
+        sub_phase=payload.get("sub_phase"),
+        night_turn=payload.get("night_turn"),
+    )
+    await ws_manager.send_to_session(session_id, {"type": "phase_changed", "payload": payload})
+    return payload
 
 
 async def _persist_phase_changed(
