@@ -398,17 +398,10 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
     if player.status != "alive":
         raise GameError(403, "player_dead", "Выбывшие игроки не могут совершать действия")
 
-    existing_ack = await db.scalar(
-        select(GameEvent.id).where(
-            GameEvent.session_id == session.id,
-            GameEvent.phase_id == phase.id,
-            GameEvent.event_type == "role_acknowledged",
-            GameEvent.payload["player_id"].astext == str(player.id),
-        )
-    )
-    if existing_ack:
-        raise GameError(409, "action_already_submitted", "Вы уже сделали выбор в этой фазе")
-
+    # Полагаемся на partial unique index (миграция 20260516_unique_role_ack):
+    # параллельный второй запрос упадёт с IntegrityError, ловим его как 409.
+    # SELECT-then-INSERT раньше был race-prone — между двумя запросами оба видели
+    # пустой результат и оба успешно вставлялись.
     db.add(
         GameEvent(
             id=uuid.uuid4(),
@@ -418,7 +411,11 @@ async def acknowledge_role(db: AsyncSession, session: Session, player: Player) -
             payload={"player_id": str(player.id)},
         )
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise GameError(409, "action_already_submitted", "Вы уже сделали выбор в этой фазе")
 
     alive_total = await db.scalar(
         select(func.count(Player.id)).where(Player.session_id == session.id, Player.status == "alive")

@@ -89,6 +89,37 @@ export function subscribeAudioPreload(listener: (progress: AudioPreloadProgress)
   };
 }
 
+/**
+ * Освобождает все созданные blob: URL'ы и сбрасывает кэш предзагрузки.
+ * После вызова preloadNarrationAudio() начнёт загрузку с нуля.
+ *
+ * Использовать при logout / при долгом простое — иначе blob'ы держатся в
+ * памяти браузера до полной перезагрузки страницы. Между сессиями одного
+ * пользователя кэш чистить не надо: озвучка переиспользуется.
+ */
+export function clearAudioPreloadCache(): void {
+  if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+    blobUrls.forEach((blobUrl) => {
+      try {
+        URL.revokeObjectURL(blobUrl);
+      } catch {
+        /* noop — браузер мог уже освободить blob сам */
+      }
+    });
+  }
+  blobUrls.clear();
+  loadedUrls.clear();
+  failedUrls.clear();
+  preloadPromise = null;
+  currentProgress = {
+    total: AUDIO_URLS.length,
+    loaded: 0,
+    failed: 0,
+    done: AUDIO_URLS.length === 0,
+  };
+  emitProgress();
+}
+
 export function preloadNarrationAudio(): Promise<AudioPreloadResult> {
   if (preloadPromise) {
     return preloadPromise;
