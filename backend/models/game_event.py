@@ -27,6 +27,9 @@ class GameEvent(Base):
             name="ck_game_events_type",
         ),
         Index("idx_game_events_session_created", "session_id", "created_at"),
+        # Composite index для частых COUNT/SELECT по (session, phase, event_type) (#19):
+        # acknowledge_role и /state часто гоняют WHERE session_id=? AND phase_id=? AND event_type=?
+        Index("ix_game_events_session_phase_type", "session_id", "phase_id", "event_type"),
         # Partial unique index — защита от двойного role_acknowledged.
         # Создаётся миграцией 20260516_unique_role_ack (postgresql_where).
         Index(
