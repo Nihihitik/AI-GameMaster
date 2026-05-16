@@ -29,6 +29,7 @@ from schemas.auth import (
     RefreshRequest,
     RegisterRequest,
     TokenResponse,
+    UpdateAvatarRequest,
     UpdateNicknameRequest,
 )
 from services.auth_service import (
@@ -176,15 +177,20 @@ async def refresh(
     return TokenResponse(access_token=access, refresh_token=refresh_token)
 
 
+async def _me_response(user: User, db: AsyncSession) -> MeResponse:
+    return MeResponse(
+        user_id=str(user.id),
+        email=user.email,
+        nickname=user.display_name,
+        has_pro=await has_active_pro(db, user.id),
+        created_at=user.created_at.isoformat(),
+        avatar_url=user.avatar_url,
+    )
+
+
 @router.get("/me", response_model=MeResponse)
 async def me(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> MeResponse:
-    return MeResponse(
-        user_id=str(current_user.id),
-        email=current_user.email,
-        nickname=current_user.display_name,
-        has_pro=await has_active_pro(db, current_user.id),
-        created_at=current_user.created_at.isoformat(),
-    )
+    return await _me_response(current_user, db)
 
 
 @router.patch("/me", response_model=MeResponse)
@@ -203,13 +209,32 @@ async def update_me_nickname(
         "User nickname updated",
         user_id=str(current_user.id),
     )
-    return MeResponse(
+    return await _me_response(current_user, db)
+
+
+@router.put("/me/avatar", response_model=MeResponse)
+async def update_me_avatar(
+    payload: UpdateAvatarRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MeResponse:
+    """Сохраняет аватарку как base64 data URL в users.avatar_url.
+
+    `avatar_data_url=null` удаляет аватарку. Размер ограничен ~200КБ —
+    клиент должен сжать canvas'ом до ~50КБ перед отправкой.
+    """
+    current_user.avatar_url = payload.avatar_data_url
+    await db.commit()
+    await db.refresh(current_user)
+    log_event(
+        logger,
+        logging.INFO,
+        "auth.avatar_updated",
+        "User avatar updated",
         user_id=str(current_user.id),
-        email=current_user.email,
-        nickname=current_user.display_name,
-        has_pro=await has_active_pro(db, current_user.id),
-        created_at=current_user.created_at.isoformat(),
+        avatar_set=payload.avatar_data_url is not None,
     )
+    return await _me_response(current_user, db)
 
 
 @router.delete("/me", status_code=204)

@@ -49,6 +49,7 @@ export interface UserProfile {
   nickname: string;
   has_pro: boolean;
   created_at: string;
+  avatar_url?: string | null;
 }
 
 export interface LogoutRequest {
@@ -57,6 +58,10 @@ export interface LogoutRequest {
 
 export interface UpdateNicknameRequest {
   nickname: string;
+}
+
+export interface UpdateAvatarRequest {
+  avatar_data_url: string | null;
 }
 
 export interface DeleteAccountRequest {
