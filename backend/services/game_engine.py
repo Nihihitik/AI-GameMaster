@@ -319,19 +319,25 @@ async def check_win_condition(db: AsyncSession, session_id: uuid.UUID) -> str | 
       2. Мафия: маньяков нет, живой мафии >= живого города.
       3. Город: нет ни мафии, ни маньяков.
       Иначе — игра продолжается.
+
+    #24: используем selectinload(Player.role) чтобы получить и игроков и их роли
+    одним запросом (раньше было два: alive players + roles по in_(...)).
     """
-    alive = (await db.scalars(select(Player).where(Player.session_id == session_id, Player.status == "alive"))).all()
+    alive = (
+        await db.scalars(
+            select(Player)
+            .options(selectinload(Player.role))
+            .where(Player.session_id == session_id, Player.status == "alive")
+        )
+    ).all()
     if not alive:
         return None
-    role_ids = {p.role_id for p in alive if p.role_id is not None}
-    if not role_ids:
+    if all(p.role_id is None for p in alive):
         return None
-    roles = (await db.scalars(select(Role).where(Role.id.in_(role_ids)))).all()
-    role_by_id = {r.id: r for r in roles}
 
-    alive_mafia = sum(1 for p in alive if p.role_id and role_by_id[p.role_id].team == "mafia")
-    alive_city = sum(1 for p in alive if p.role_id and role_by_id[p.role_id].team == "city")
-    alive_maniac = sum(1 for p in alive if p.role_id and role_by_id[p.role_id].team == "maniac")
+    alive_mafia = sum(1 for p in alive if p.role and p.role.team == "mafia")
+    alive_city = sum(1 for p in alive if p.role and p.role.team == "city")
+    alive_maniac = sum(1 for p in alive if p.role and p.role.team == "maniac")
 
     # Маньяк остался в живых один против одного (или меньше).
     if alive_maniac == 1 and (alive_city + alive_mafia) <= 1:
