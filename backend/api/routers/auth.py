@@ -9,7 +9,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.deps import get_current_user, get_db, has_active_pro
 from core.exceptions import GameError
 from core.logging import log_event, set_log_context
+from core.rate_limit import limiter
 from models.refresh_token import RefreshToken
 from models.user import User
 from schemas.auth import (
@@ -46,7 +47,12 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/register", response_model=AuthResponse, status_code=201)
-async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)) -> AuthResponse:
+@limiter.limit("5/hour")
+async def register(
+    request: Request,
+    payload: RegisterRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AuthResponse:
     existing = await db.scalar(select(User).where(User.email == payload.email))
     if existing is not None:
         raise GameError(409, "email_already_registered", "Этот email уже зарегистрирован")
@@ -88,7 +94,12 @@ async def register(payload: RegisterRequest, db: AsyncSession = Depends(get_db))
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> AuthResponse:
+@limiter.limit("10/5minutes")
+async def login(
+    request: Request,
+    payload: LoginRequest,
+    db: AsyncSession = Depends(get_db),
+) -> AuthResponse:
     user = await db.scalar(select(User).where(User.email == payload.email))
     if user is None:
         raise GameError(401, "invalid_credentials", "Неверный email или пароль")
@@ -119,7 +130,12 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> Au
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+@limiter.limit("30/5minutes")
+async def refresh(
+    request: Request,
+    payload: RefreshRequest,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse:
     now = datetime.now(timezone.utc)
     token_hash = hash_refresh_token(payload.refresh_token)
 

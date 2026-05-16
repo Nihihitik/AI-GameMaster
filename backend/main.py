@@ -10,10 +10,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
 from core.config import settings
 from core.exceptions import GameError, game_error_handler
 from core.logging import configure_logging, log_event, log_exception
 from core.logging_middleware import RequestContextLoggingMiddleware
+from core.rate_limit import limiter, rate_limit_exceeded_handler
 from services.recovery_service import recovery_loop
 from services.role_catalog import ensure_role_catalog
 
@@ -23,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 
 app = FastAPI(title="AI-GameMaster")
+
+# Rate limiter: ставим до CORS и логирования, чтобы 429 уходил без полной обработки.
+# Лимиты per-route задаются декоратором @limiter.limit(...) в роутерах.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
