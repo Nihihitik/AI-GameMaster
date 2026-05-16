@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request, Response
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -146,19 +146,37 @@ async def refresh(
     rt = await db.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
     if rt is None:
         raise GameError(401, "token_invalid", "Refresh токен не найден или уже использован")
+
+    # Reuse detection: токен уже отзывался → угон, инвалидируем все активные.
+    if rt.revoked_at is not None:
+        await db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.user_id == rt.user_id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        await db.commit()
+        log_event(
+            logger,
+            logging.WARNING,
+            "auth.refresh_reuse_detected",
+            "Refresh token reuse detected; all user tokens revoked",
+            user_id=str(rt.user_id),
+        )
+        raise GameError(401, "token_invalid", "Refresh токен не найден или уже использован")
+
     if rt.expires_at < now:
-        await db.delete(rt)
+        rt.revoked_at = now
         await db.commit()
         raise GameError(401, "token_expired", "Срок действия токена истёк")
 
     user = await db.get(User, rt.user_id)
     if user is None:
-        await db.delete(rt)
+        rt.revoked_at = now
         await db.commit()
         raise GameError(401, "token_invalid", "Refresh токен не найден или уже использован")
 
-    # rotation: удалить использованный
-    await db.delete(rt)
+    # rotation: soft-revoke использованного токена для reuse-detection.
+    rt.revoked_at = now
 
     access = create_access_token(str(user.id), user.email)
     refresh_token = create_refresh_token()
@@ -257,10 +275,15 @@ async def logout(
     db: AsyncSession = Depends(get_db),
 ) -> None:
     token_hash = hash_refresh_token(payload.refresh_token)
+    # Soft-revoke вместо delete: запись остаётся для reuse-detection в /refresh.
     await db.execute(
-        delete(RefreshToken).where(
-            RefreshToken.user_id == current_user.id, RefreshToken.token_hash == token_hash
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == current_user.id,
+            RefreshToken.token_hash == token_hash,
+            RefreshToken.revoked_at.is_(None),
         )
+        .values(revoked_at=datetime.now(timezone.utc))
     )
     await db.commit()
     log_event(logger, logging.INFO, "auth.logout_succeeded", "User logged out", user_id=str(current_user.id))
