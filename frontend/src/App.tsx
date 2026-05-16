@@ -5,6 +5,7 @@ import AuthPage from './pages/AuthPage';
 import LandingPage from './pages/LandingPage';
 import Loader from './components/ui/Loader';
 import AppErrorBoundary from './components/app/AppErrorBoundary';
+import RouteErrorBoundary from './components/app/RouteErrorBoundary';
 import { useAuthStore } from './stores/authStore';
 import { prepareAuthStorageFromLocation } from './utils/tokenStorage';
 import { setAppRouter } from './utils/routerRef';
@@ -57,25 +58,31 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 // Data router (createBrowserRouter) обязателен для useBlocker в react-router-dom v7.
 // Обычный <BrowserRouter> / <Routes> — legacy, useBlocker в нём бросает invariant.
+// #26: errorElement подключён к каждому route. Exception в одной странице
+// не валит весь SPA — react-router рендерит RouteErrorBoundary локально
+// вместо element, остальные роуты остаются работоспособными.
+const errorElement = <RouteErrorBoundary />;
+
 const devRoutes: RouteObject[] = DevUiPage
   ? [
       {
         path: '/ui',
         element: withSuspense(<DevUiPage />),
+        errorElement,
       },
     ]
   : [];
 
 const router = createBrowserRouter([
-  { path: '/', element: <LandingPage /> },
-  { path: '/pricing', element: withSuspense(<PricingPage />) },
-  { path: '/auth', element: <AuthPage /> },
-  { path: '/app', element: <ProtectedRoute>{withSuspense(<HomePage />)}</ProtectedRoute> },
-  { path: '/profile', element: <ProtectedRoute>{withSuspense(<ProfilePage />)}</ProtectedRoute> },
-  { path: '/sessions/:code/:playerSlug', element: withSuspense(<DevPlayerBootstrapPage />) },
-  { path: '/sessions/:code', element: <ProtectedRoute>{withSuspense(<LobbyPage />)}</ProtectedRoute> },
-  { path: '/sessions/:code/stories', element: <ProtectedRoute>{withSuspense(<StorySelectionPage />)}</ProtectedRoute> },
-  { path: '/game/:sessionId', element: <ProtectedRoute>{withSuspense(<GamePage />)}</ProtectedRoute> },
+  { path: '/', element: <LandingPage />, errorElement },
+  { path: '/pricing', element: withSuspense(<PricingPage />), errorElement },
+  { path: '/auth', element: <AuthPage />, errorElement },
+  { path: '/app', element: <ProtectedRoute>{withSuspense(<HomePage />)}</ProtectedRoute>, errorElement },
+  { path: '/profile', element: <ProtectedRoute>{withSuspense(<ProfilePage />)}</ProtectedRoute>, errorElement },
+  { path: '/sessions/:code/:playerSlug', element: withSuspense(<DevPlayerBootstrapPage />), errorElement },
+  { path: '/sessions/:code', element: <ProtectedRoute>{withSuspense(<LobbyPage />)}</ProtectedRoute>, errorElement },
+  { path: '/sessions/:code/stories', element: <ProtectedRoute>{withSuspense(<StorySelectionPage />)}</ProtectedRoute>, errorElement },
+  { path: '/game/:sessionId', element: <ProtectedRoute>{withSuspense(<GamePage />)}</ProtectedRoute>, errorElement },
   ...devRoutes,
   { path: '*', element: <Navigate to="/" replace /> },
 ]);
