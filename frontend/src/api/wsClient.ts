@@ -25,7 +25,11 @@ type WsPayloadRecord = Record<string, unknown>;
 
 const PING_MESSAGE = JSON.stringify({ type: 'ping' });
 const NO_RECONNECT_CODES = new Set([4000, 4001, 4003]);
-const MAX_RECONNECT_ATTEMPTS = 15;
+// Капируем delay экспоненциального backoff'а, но НЕ количество попыток.
+// Раньше после ~15 попыток (≈10 минут) клиент сдавался — это убивало UX в
+// случае долгого отсутствия сети. Теперь пробуем бесконечно с потолком 30s.
+const MAX_RECONNECT_DELAY_MS = 30_000;
+const MAX_BACKOFF_EXPONENT = 6; // 500 * 2^6 = 32_000 → клампится до 30_000
 
 function isPayloadRecord(payload: unknown): payload is WsPayloadRecord {
   return typeof payload === 'object' && payload !== null;
@@ -405,14 +409,11 @@ class WsClient {
     const sessionId = this.currentSessionId;
     if (!sessionId) return;
 
-    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      this.socket = null;
-      this.currentSessionId = null;
-      return;
-    }
-
-    // Экспоненциальный backoff: 500ms * 2^n, максимум 30s.
-    const delay = Math.min(30_000, 500 * Math.pow(2, this.reconnectAttempts));
+    // Экспоненциальный backoff: 500ms * 2^n, потолок MAX_RECONNECT_DELAY_MS.
+    // Без лимита попыток: пользователь может уехать в лифт на час, при возврате
+    // сети window.online событие сбросит attempts и подключится без ожидания.
+    const exponent = Math.min(this.reconnectAttempts, MAX_BACKOFF_EXPONENT);
+    const delay = Math.min(MAX_RECONNECT_DELAY_MS, 500 * Math.pow(2, exponent));
     this.reconnectAttempts += 1;
     logger.warn('ws.reconnect_scheduled', 'Scheduling WebSocket reconnect', {
       code: e.code,
@@ -432,6 +433,38 @@ class WsClient {
       }
     }, delay);
   }
+
+  /**
+   * Вызывается из глобального online-listener. Сбрасывает backoff и сразу
+   * пытается переподключиться к текущей сессии — иначе придётся ждать до
+   * 30s до следующей попытки бэкоффа.
+   */
+  handleOnline(): void {
+    if (!this.currentSessionId || this.socket) {
+      return;
+    }
+    logger.info('ws.network_restored', 'Network restored, reconnecting immediately', {
+      sessionId: this.currentSessionId,
+    }, { sessionId: this.currentSessionId });
+    if (this.reconnectTimeoutId !== null) {
+      clearTimeout(this.reconnectTimeoutId);
+      this.reconnectTimeoutId = null;
+    }
+    this.reconnectAttempts = 0;
+    this.connect(this.currentSessionId);
+  }
 }
 
 export const wsClient = new WsClient();
+
+// Глобальные слушатели: при возврате сети сразу дёргаем reconnect, не ждём
+// бэкофф-таймер. visibilitychange ловит «вернулся на вкладку» — браузеры
+// замораживают WS на фоне, после fg она может оказаться dead.
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => wsClient.handleOnline());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      wsClient.handleOnline();
+    }
+  });
+}

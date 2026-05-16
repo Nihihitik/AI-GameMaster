@@ -28,8 +28,18 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Явный whitelist: с credentials=True wildcards в CORS считаются плохой
+    # практикой даже когда CORSMiddleware их допускает. Открытый * заголовка
+    # лишний раз светит surface поверх того, что нужно.
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "X-Request-ID",
+        "X-Client-Request-ID",
+    ],
+    expose_headers=["X-Request-ID"],
 )
 app.add_middleware(RequestContextLoggingMiddleware)
 
