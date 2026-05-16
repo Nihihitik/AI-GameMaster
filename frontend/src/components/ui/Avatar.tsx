@@ -18,7 +18,7 @@ interface AvatarProps {
   ariaLabel?: string;
 }
 
-export default function Avatar({
+function AvatarImpl({
   variant,
   name,
   src,
@@ -66,3 +66,6 @@ export default function Avatar({
     </div>
   );
 }
+
+const Avatar = React.memo(AvatarImpl);
+export default Avatar;

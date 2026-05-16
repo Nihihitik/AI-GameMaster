@@ -24,7 +24,11 @@ type WsMessage = { type: string; payload?: unknown };
 type WsPayloadRecord = Record<string, unknown>;
 
 const PING_MESSAGE = JSON.stringify({ type: 'ping' });
+const PONG_MESSAGE = JSON.stringify({ type: 'pong' });
 const NO_RECONNECT_CODES = new Set([4000, 4001, 4003]);
+// Если backend не ответил pong в течение этого окна после нашего ping —
+// считаем сокет мёртвым и форсируем close → onclose запустит reconnect.
+const PONG_TIMEOUT_MS = 15_000;
 // Капируем delay экспоненциального backoff'а, но НЕ количество попыток.
 // Раньше после ~15 попыток (≈10 минут) клиент сдавался — это убивало UX в
 // случае долгого отсутствия сети. Теперь пробуем бесконечно с потолком 30s.
@@ -261,6 +265,7 @@ const HANDLERS: Record<string, (payload: unknown) => void> = {
 class WsClient {
   private socket: WebSocket | null = null;
   private heartbeatId: number | null = null;
+  private pongTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private currentSessionId: string | null = null;
   private reconnectTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -364,6 +369,19 @@ class WsClient {
   }
 
   private dispatch(msg: WsMessage): void {
+    // ping от сервера → отвечаем pong (любое сообщение тоже сбрасывает pong-watchdog).
+    if (msg.type === 'ping') {
+      this.clearPongWatchdog();
+      this.sendRaw(PONG_MESSAGE);
+      return;
+    }
+    if (msg.type === 'pong') {
+      this.clearPongWatchdog();
+      return;
+    }
+    // Любое валидное сообщение от сервера — признак жизни сокета.
+    this.clearPongWatchdog();
+
     const handler = HANDLERS[msg.type];
     if (handler) {
       handler(msg.payload);
@@ -375,12 +393,49 @@ class WsClient {
     }
   }
 
+  private sendRaw(data: string): void {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      try {
+        this.socket.send(data);
+      } catch (err) {
+        logger.warn('ws.send_failed', 'WebSocket send failed', {
+          reason: err instanceof Error ? err.message : String(err),
+        }, { sessionId: this.currentSessionId });
+      }
+    }
+  }
+
+  private clearPongWatchdog(): void {
+    if (this.pongTimeoutId !== null) {
+      clearTimeout(this.pongTimeoutId);
+      this.pongTimeoutId = null;
+    }
+  }
+
+  private armPongWatchdog(): void {
+    this.clearPongWatchdog();
+    this.pongTimeoutId = setTimeout(() => {
+      this.pongTimeoutId = null;
+      logger.warn('ws.pong_timeout', 'WebSocket pong timeout, forcing reconnect', {
+        timeoutMs: PONG_TIMEOUT_MS,
+      }, { sessionId: this.currentSessionId });
+      // Закрываем сокет — onclose-обработчик запустит reconnect через бэкофф.
+      try {
+        this.socket?.close();
+      } catch {
+        // ignore
+      }
+    }, PONG_TIMEOUT_MS);
+  }
+
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.heartbeatId = window.setInterval(() => {
       if (this.socket?.readyState === WebSocket.OPEN) {
         try {
           this.socket.send(PING_MESSAGE);
+          // Запускаем watchdog: если pong не придёт за PONG_TIMEOUT_MS — реконнектим.
+          this.armPongWatchdog();
         } catch (err) {
           logger.warn('ws.heartbeat_failed', 'WebSocket heartbeat send failed', {
             reason: err instanceof Error ? err.message : String(err),
@@ -395,6 +450,7 @@ class WsClient {
       window.clearInterval(this.heartbeatId);
       this.heartbeatId = null;
     }
+    this.clearPongWatchdog();
   }
 
   private handleClose(e: CloseEvent): void {
