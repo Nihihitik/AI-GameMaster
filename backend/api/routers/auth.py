@@ -9,7 +9,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 @limiter.limit("5/hour")
 async def register(
     request: Request,
+    response: Response,
     payload: RegisterRequest,
     db: AsyncSession = Depends(get_db),
 ) -> AuthResponse:
@@ -97,6 +98,7 @@ async def register(
 @limiter.limit("10/5minutes")
 async def login(
     request: Request,
+    response: Response,
     payload: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> AuthResponse:
@@ -133,6 +135,7 @@ async def login(
 @limiter.limit("30/5minutes")
 async def refresh(
     request: Request,
+    response: Response,
     payload: RefreshRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
