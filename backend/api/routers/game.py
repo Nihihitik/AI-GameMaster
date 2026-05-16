@@ -25,6 +25,7 @@ from models.night_action import NightAction
 from models.player import Player
 from models.role import Role
 from models.session import Session
+from schemas.game import NightActionRequest, VoteRequest
 from services.game_engine import acknowledge_role, get_current_phase, resolve_votes, start_game, transition_to_voting
 from services.audio_preload import clear_audio_preload
 from services.recovery_service import recover_missing_phase
@@ -98,7 +99,7 @@ async def ack_role(
 @router.post("/{session_id}/night-action")
 async def night_action(
     session_id: uuid.UUID,
-    payload: dict,
+    payload: NightActionRequest,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -115,13 +116,9 @@ async def night_action(
     if not phase or phase.phase_type != "night":
         raise GameError(403, "wrong_phase", "Действие недоступно в текущей фазе")
 
-    target_player_id = payload.get("target_player_id")
-    if not target_player_id:
-        raise GameError(400, "validation_error", "target_player_id: обязательное поле")
-    try:
-        target_uuid = uuid.UUID(str(target_player_id))
-    except Exception:
-        raise GameError(400, "validation_error", "target_player_id: неверный UUID")
+    # #18: Pydantic валидирует UUID на этапе парсинга — невалидный target_player_id
+    # уйдёт 400 validation_error через RequestValidationError handler.
+    target_uuid = payload.target_player_id
 
     target = await db.get(Player, target_uuid)
     if not target or target.session_id != session_id:
@@ -283,7 +280,7 @@ async def night_action(
 @router.post("/{session_id}/vote")
 async def vote(
     session_id: uuid.UUID,
-    payload: dict,
+    payload: VoteRequest,
     current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -312,13 +309,9 @@ async def vote(
     if already:
         raise GameError(409, "action_already_submitted", "Вы уже сделали выбор в этой фазе")
 
-    target_player_id = payload.get("target_player_id", None)
-    target_uuid = None
-    if target_player_id is not None:
-        try:
-            target_uuid = uuid.UUID(str(target_player_id))
-        except Exception:
-            raise GameError(400, "validation_error", "target_player_id: неверный UUID")
+    # #18: Pydantic валидирует UUID, None означает «воздержался».
+    target_uuid = payload.target_player_id
+    if target_uuid is not None:
         if target_uuid == player.id:
             raise GameError(400, "invalid_target", "Нельзя голосовать за себя")
         target = await db.get(Player, target_uuid)
