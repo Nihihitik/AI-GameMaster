@@ -84,16 +84,35 @@ def _is_turn_enabled(session: Session, turn_slug: str) -> bool:
 
 
 async def _wait_or_pause(session_id: uuid.UUID, seconds: float) -> None:
+    """Ждать `seconds` секунд, учитывая паузу игры.
+
+    Контракт:
+    - Если игра НЕ на паузе — спим до истечения времени, прерываясь при наступлении паузы.
+    - Если игра на паузе — ждём `resume_event.set()` и продолжаем счёт.
+    - Время "съеденное" паузой НЕ считается за основу: возвращаемся только когда
+      набрано суммарно `seconds` РЕАЛЬНОГО времени без паузы.
+
+    Раньше polling'или флаг каждые 200ms; теперь `asyncio.wait_for` спит без CPU
+    и просыпается мгновенно как только pause/resume событие set'ится.
+    """
     rt = runtime_state.get(session_id)
-    deadline = asyncio.get_running_loop().time() + seconds
-    while True:
+    loop = asyncio.get_running_loop()
+    remaining = float(seconds)
+    while remaining > 0:
+        # На паузе — ждём ресум перед тем как считать оставшееся время.
         if rt.game_paused:
-            await asyncio.sleep(0.2)
-            continue
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
+            await rt.resume_event.wait()
+        # Прерываемый sleep: возвращается либо по таймауту (тогда отсчёт закончен),
+        # либо если кто-то set'нул pause_event (тогда продолжаем с уменьшенным remaining).
+        start = loop.time()
+        try:
+            await asyncio.wait_for(rt.pause_event.wait(), timeout=remaining)
+            # Сюда пришли только если пауза наступила. Уменьшаем remaining на
+            # фактическое время сна и идём на следующую итерацию (там await resume).
+            remaining -= loop.time() - start
+        except asyncio.TimeoutError:
+            # Дошли до конца без паузы.
             return
-        await asyncio.sleep(min(0.2, remaining))
 
 
 def _stamp_started_at(announcement: dict | None, ts=None) -> dict | None:
