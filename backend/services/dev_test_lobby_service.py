@@ -13,7 +13,10 @@ from models.session import Session
 from models.user import User
 from schemas.dev import DevLobbyInfo, DevLobbyPlayerLink
 from schemas.session import PlayerInList, SessionDetailResponse
+from services.audio_manifest import get_manifest
+from services.audio_preload import AUDIO_PRELOAD_SETTINGS_KEY
 from services.auth_service import hash_password
+from core.utils import utc_now
 
 
 DEV_TEST_LOBBY_FLAG = "dev_test_lobby"
@@ -171,4 +174,23 @@ async def create_synthetic_test_player(
             },
         )
     )
+
+    # Dev-test "боты" не имеют открытой вкладки — никогда не вызовут
+    # markAudioPreloadReady. Помечаем их audio-ready сразу при создании,
+    # иначе автостарт фазы name-pick и кнопка "Начать игру" зависнут на
+    # ready_count < players_total (см. ensure_audio_preload_ready).
+    manifest_version = get_manifest().version
+    current_settings = dict(session.settings or {})
+    raw_preload = current_settings.get(AUDIO_PRELOAD_SETTINGS_KEY)
+    if isinstance(raw_preload, dict) and raw_preload.get("manifest_version") == manifest_version:
+        ready = dict(raw_preload.get("ready") or {})
+    else:
+        ready = {}
+    ready[str(player.id)] = utc_now().isoformat()
+    current_settings[AUDIO_PRELOAD_SETTINGS_KEY] = {
+        "manifest_version": manifest_version,
+        "ready": ready,
+    }
+    session.settings = current_settings
+
     return user, player, link
