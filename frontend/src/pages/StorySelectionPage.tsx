@@ -159,6 +159,10 @@ export default function StorySelectionPage() {
 
   const audioPlayersTotal = audioPreloadStatus?.players_total ?? players.length;
   const audioReadyCount = audioPreloadStatus?.ready_count ?? 0;
+  const audioReadyPlayerIds = React.useMemo(
+    () => new Set(audioPreloadStatus?.ready_player_ids ?? []),
+    [audioPreloadStatus],
+  );
   const localAudioReady = audioPreloadProgress.done && audioPreloadProgress.failed === 0;
   const audioReadyForGame = audioPreloadStatus
     ? localAudioReady && (!audioPreloadStatus.required || audioReadyCount >= audioPlayersTotal)
@@ -168,13 +172,28 @@ export default function StorySelectionPage() {
     100,
     Math.round(((audioPreloadProgress.loaded + audioPreloadProgress.failed) / audioProgressTotal) * 100),
   );
-  const audioStatusText = audioPreloadProgress.failed > 0
-    ? `Ошибка загрузки озвучки: ${audioPreloadProgress.failed}`
-    : !localAudioReady
-      ? `Загрузка озвучки ${audioPreloadProgress.loaded}/${audioPreloadProgress.total}`
-      : audioReadyForGame
-        ? `Озвучка готова ${audioReadyCount}/${audioPlayersTotal}`
-        : `Ожидание игроков ${audioReadyCount}/${audioPlayersTotal}`;
+
+  // 4 чётких состояния для UI-карточки ожидания. Раньше всё было в одной
+  // строке-прогрессбаре — невозможно было понять, что вообще происходит
+  // ("грузим у себя" vs "уже готов, ждём остальных" vs "ошибка").
+  type AudioUiState = 'loading' | 'waiting' | 'ready' | 'error';
+  const audioUiState: AudioUiState =
+    audioPreloadProgress.failed > 0
+      ? 'error'
+      : !localAudioReady
+        ? 'loading'
+        : audioReadyForGame
+          ? 'ready'
+          : 'waiting';
+
+  const audioStatusText =
+    audioUiState === 'error'
+      ? `Ошибка загрузки озвучки: ${audioPreloadProgress.failed}`
+      : audioUiState === 'loading'
+        ? `Загрузка озвучки ${audioPreloadProgress.loaded}/${audioPreloadProgress.total}`
+        : audioUiState === 'ready'
+          ? `Озвучка готова ${audioReadyCount}/${audioPlayersTotal}`
+          : `Ожидание игроков ${audioReadyCount}/${audioPlayersTotal}`;
 
   // По истечению таймера хост автоматически запускает игру. Нехосты ждут
   // game_started/role_assigned WS-события.
@@ -279,13 +298,75 @@ export default function StorySelectionPage() {
               <span className="story-name-pick__current-label">Вы играете как:</span>
               <span className="story-name-pick__current-name">{myName || '—'}</span>
             </div>
-            <div className="story-name-pick__audio">
-              <div className="story-name-pick__audio-row">
-                <span>{audioStatusText}</span>
-                <span>{audioPreloadPercent}%</span>
+            <div className={`story-audio story-audio--${audioUiState}`} role="status" aria-live="polite">
+              <div className="story-audio__icon" aria-hidden="true">
+                {audioUiState === 'loading' && (
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                )}
+                {audioUiState === 'waiting' && (
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                  </svg>
+                )}
+                {audioUiState === 'ready' && (
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                )}
+                {audioUiState === 'error' && (
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                )}
               </div>
-              <div className="story-name-pick__audio-track">
-                <span style={{ width: `${audioPreloadPercent}%` }} />
+              <div className="story-audio__body">
+                <div className="story-audio__title">
+                  {audioUiState === 'loading' && 'Подготовка озвучки'}
+                  {audioUiState === 'waiting' && 'Ждём остальных игроков'}
+                  {audioUiState === 'ready' && 'Все готовы к игре'}
+                  {audioUiState === 'error' && 'Не удалось загрузить озвучку'}
+                </div>
+                <div className="story-audio__subtitle">
+                  {audioUiState === 'loading' && 'Файлы кэшируются заранее, чтобы во время игры не было пауз.'}
+                  {audioUiState === 'waiting' && 'У вас всё загружено. Остальные ещё качают озвучку.'}
+                  {audioUiState === 'ready' && 'Можно начинать партию.'}
+                  {audioUiState === 'error' && 'Перезагрузите страницу. Если ошибка повторяется — сообщите хосту.'}
+                </div>
+                {audioUiState === 'loading' && (
+                  <>
+                    <div className="story-audio__track">
+                      <span style={{ width: `${audioPreloadPercent}%` }} />
+                    </div>
+                    <div className="story-audio__meta">
+                      <span>{audioPreloadProgress.loaded}/{audioPreloadProgress.total} файлов</span>
+                      <span>{audioPreloadPercent}%</span>
+                    </div>
+                  </>
+                )}
+                {audioUiState === 'waiting' && (
+                  <>
+                    <div className="story-audio__track">
+                      <span
+                        style={{
+                          width: `${audioPlayersTotal > 0 ? Math.round((audioReadyCount / audioPlayersTotal) * 100) : 0}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="story-audio__meta">
+                      <span>Готово игроков</span>
+                      <span>{audioReadyCount}/{audioPlayersTotal}</span>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
             <div className="story-name-pick__grid">
@@ -333,22 +414,40 @@ export default function StorySelectionPage() {
             <div className="story-name-pick__players">
               <h4 className="story-name-pick__players-title">Игроки в лобби</h4>
               <ul className="story-name-pick__players-list">
-                {players.map((p) => (
-                  <li
-                    key={p.id}
-                    className={`story-name-pick__player${
-                      p.id === myPlayerId ? ' story-name-pick__player--me' : ''
-                    }`}
-                  >
-                    <span className="story-name-pick__player-name">{p.name}</span>
-                    {p.is_host && (
-                      <span className="story-name-pick__player-tag">хост</span>
-                    )}
-                    {p.id === myPlayerId && (
-                      <span className="story-name-pick__player-tag story-name-pick__player-tag--me">вы</span>
-                    )}
-                  </li>
-                ))}
+                {players.map((p) => {
+                  const isAudioReady = audioReadyPlayerIds.has(p.id);
+                  return (
+                    <li
+                      key={p.id}
+                      className={`story-name-pick__player${
+                        p.id === myPlayerId ? ' story-name-pick__player--me' : ''
+                      }`}
+                    >
+                      <span
+                        className={`story-name-pick__player-ready story-name-pick__player-ready--${
+                          isAudioReady ? 'ok' : 'wait'
+                        }`}
+                        title={isAudioReady ? 'Озвучка загружена' : 'Озвучка ещё загружается'}
+                        aria-label={isAudioReady ? 'Озвучка загружена' : 'Озвучка загружается'}
+                      >
+                        {isAudioReady ? (
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        ) : (
+                          <span className="story-name-pick__player-spinner" aria-hidden="true" />
+                        )}
+                      </span>
+                      <span className="story-name-pick__player-name">{p.name}</span>
+                      {p.is_host && (
+                        <span className="story-name-pick__player-tag">хост</span>
+                      )}
+                      {p.id === myPlayerId && (
+                        <span className="story-name-pick__player-tag story-name-pick__player-tag--me">вы</span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
 
