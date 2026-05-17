@@ -77,6 +77,7 @@ function playersFromList(list: PlayerInList[]): LobbyPlayer[] {
   return list.map((p) => ({
     id: p.id,
     name: p.name,
+    username: p.username ?? null,
     join_order: p.join_order,
     is_host: p.is_host,
   }));
@@ -206,6 +207,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const mapped: LobbyPlayer = {
         id: player.id,
         name: player.name,
+        username: player.username ?? null,
         join_order: player.join_order,
         is_host: player.is_host,
       };

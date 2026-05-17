@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from api.deps import get_current_user, get_db, get_player_or_404, get_session_or_404, require_host
 from core.exceptions import GameError
@@ -18,6 +19,7 @@ from models.player import Player
 from models.session import Session
 from schemas.session import AudioPreloadReadyRequest, PlayerInList, RenamePlayerRequest, UpdateSettingsRequest
 from services.audio_preload import clear_audio_preload, get_audio_preload_status, mark_audio_preload_ready
+from services.dev_test_lobby_service import mark_synthetic_players_audio_ready
 from services.game_engine import apply_host_kick
 from services.lobby_service import handle_player_left
 from services.pause_service import pause_game, resume_game
@@ -39,11 +41,18 @@ async def list_players(
 ):
     session = await get_session_or_404(db, session_id)
 
-    players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
+    players = (
+        await db.scalars(
+            select(Player)
+            .options(selectinload(Player.user))
+            .where(Player.session_id == session_id)
+        )
+    ).all()
     items = [
         PlayerInList(
             id=str(p.id),
             name=p.name,
+            username=p.user.display_name if p.user else None,
             join_order=p.join_order,
             is_host=(p.user_id == session.host_user_id),
             is_me=(p.user_id == current_user.id),
@@ -72,6 +81,11 @@ async def begin_story(
         raise GameError(409, "wrong_phase", "Нельзя начать выбор сюжета после старта игры")
 
     session.settings = clear_audio_preload(session.settings)
+    # Dev-test "боты" не имеют открытой вкладки и не вызовут
+    # /audio-preload-ready. Помечаем их сразу после очистки readiness-карты,
+    # иначе фаза name-pick зависнет на ready_count < players_total и
+    # gameApi.start вернёт 409 audio_not_ready (ensure_audio_preload_ready).
+    await mark_synthetic_players_audio_ready(db, session)
     await db.commit()
 
     set_log_context(session_id=str(session_id), user_id=str(current_user.id))

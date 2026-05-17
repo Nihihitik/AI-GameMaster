@@ -125,7 +125,12 @@ export default function DayVotingScreen() {
               onClick={() => canVote && setSelectedTarget(target.player_id)}
               rightSlot={isSelected ? <span className="day-voting__target-check"><CheckIcon /></span> : null}
             >
-              {target.name}
+              <span className="day-voting__target-info">
+                <span className="day-voting__target-name">{target.name}</span>
+                {target.username && (
+                  <span className="day-voting__target-nickname">{target.username}</span>
+                )}
+              </span>
             </SelectableCard>
           );
         })}

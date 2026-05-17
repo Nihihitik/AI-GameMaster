@@ -68,7 +68,7 @@ async def _get_dev_test_session_or_404(db: AsyncSession, session_id: uuid.UUID) 
     session = await db.scalar(
         select(Session)
         .execution_options(populate_existing=True)
-        .options(selectinload(Session.players))
+        .options(selectinload(Session.players).selectinload(Player.user))
         .where(Session.id == session_id)
     )
     if session is None:
@@ -184,6 +184,7 @@ async def expand_test_lobby(
                 "payload": {
                     "id": str(new_player.id),
                     "name": new_player.name,
+                    "username": new_player.user.display_name if new_player.user else None,
                     "join_order": new_player.join_order,
                     "is_host": False,
                 },

@@ -57,6 +57,92 @@ def _role_config(session: Session) -> dict:
     return (session.settings or {}).get("role_config") or {}
 
 
+def _player_target_dict(p: Player) -> dict:
+    """Сериализация игрока для available_targets / *_eliminated WS-событий.
+
+    Возвращает payload вида ``{player_id, name, username}``, где ``username`` —
+    это никнейм аккаунта (``User.display_name``). Фронт показывает его второй
+    строкой под именем персонажа в меню голосования и ночных ролей.
+
+    Требует, чтобы ``Player`` был загружен с ``selectinload(Player.user)``.
+    Иначе обращение к ``p.user`` сделает ленивый sync-запрос и упадёт в
+    async-контексте (``MissingGreenlet``).
+    """
+    user = getattr(p, "user", None)
+    return {
+        "player_id": str(p.id),
+        "name": p.name,
+        "username": user.display_name if user is not None else None,
+    }
+
+
+async def _autofill_unselected_names(
+    db: AsyncSession,
+    session: Session,
+    players: list[Player],
+) -> list[Player]:
+    """Назначает рандомное озвученное имя игрокам, не выбравшим имя из манифеста.
+
+    Сценарии срабатывания:
+
+    * Игрок не успел нажать кнопку имени за отведённый таймер ``name-pick``-фазы
+      — у него остаётся плейсхолдерное имя из лобби (``"Игрок 3"``), которого
+      нет в озвучке. Без авто-замены ведущий не сможет произнести имя в
+      ночных/дневных нарративах.
+    * Dev-test ``боты`` создаются с именами вида ``"Игрок 2"`` и не имеют
+      открытой вкладки, чтобы выбрать имя самостоятельно.
+
+    Список свободных имён формируется как ``manifest.display_names() − {имена,
+    которые уже выбрали другие игроки и которые валидны}``. Имена раздаются
+    случайно, чтобы не давать ботам всегда первые позиции из манифеста.
+
+    Возвращает список игроков, которым было назначено новое имя — caller
+    должен закоммитить транзакцию и отправить им WS ``player_renamed``.
+    """
+    allowed = set(get_audio_manifest().display_names())
+    if not allowed:
+        return []
+
+    taken = {p.name for p in players if p.name in allowed}
+    needs_rename = [p for p in players if p.name not in allowed]
+    if not needs_rename:
+        return []
+
+    available = [n for n in allowed if n not in taken]
+    random.shuffle(available)
+
+    changed: list[Player] = []
+    for p in needs_rename:
+        if not available:
+            # Манифест содержит ~20 имён; для нормальных партий ветка
+            # недостижима. Защищаемся, чтобы не упасть на edge-кейсе.
+            break
+        new_name = available.pop()
+        old_name = p.name
+        p.name = new_name
+        db.add(
+            GameEvent(
+                id=uuid.uuid4(),
+                session_id=session.id,
+                phase_id=None,
+                event_type="player_renamed",
+                payload={"player_id": str(p.id), "name": new_name, "auto": True},
+            )
+        )
+        changed.append(p)
+        log_event(
+            logger,
+            logging.INFO,
+            "session.player_auto_renamed",
+            "Player auto-renamed at game start",
+            session_id=str(session.id),
+            player_id=str(p.id),
+            old_name=old_name,
+            new_name=new_name,
+        )
+    return changed
+
+
 def _begin_phase_transition(session_id: uuid.UUID) -> None:
     rt = runtime_state.get(session_id)
     rt.phase_transition_depth += 1
@@ -357,7 +443,14 @@ async def start_game(db: AsyncSession, session: Session) -> None:
         raise GameError(409, "game_already_started", "Игра уже началась")
     await ensure_audio_preload_ready(db, session)
 
-    players = (await db.scalars(select(Player).where(Player.session_id == session.id))).all()
+    players = list(
+        (await db.scalars(select(Player).where(Player.session_id == session.id))).all()
+    )
+    # Кто не успел выбрать имя за таймер story-страницы (или dev-test бот без
+    # вкладки) — получает рандомное имя из ещё не разобранных в манифесте,
+    # чтобы озвучка нашла аудиофайл для его имени. WS-уведомления отправляем
+    # после commit.
+    auto_renamed = await _autofill_unselected_names(db, session, players)
     role_cfg = (session.settings or {}).get("role_config") or {}
     mafia = int(role_cfg.get("mafia", 0))
     don = int(role_cfg.get("don", 0))
@@ -426,6 +519,17 @@ async def start_game(db: AsyncSession, session: Session) -> None:
         session_id=str(session.id),
         player_count=len(players),
     )
+
+    # Сначала шлём авто-rename, чтобы фронт обновил имена игроков
+    # ДО прихода game_started/role_assigned/phase_changed.
+    for p in auto_renamed:
+        await ws_manager.send_to_session(
+            session.id,
+            {
+                "type": "player_renamed",
+                "payload": {"player_id": str(p.id), "name": p.name, "auto": True},
+            },
+        )
 
     timer_seconds = int((session.settings or {}).get("role_reveal_timer_seconds") or 15)
     rt = runtime_state.get(session.id)
@@ -701,7 +805,7 @@ async def execute_night_sequence(
     players = (
         await db.scalars(
             select(Player)
-            .options(selectinload(Player.role))
+            .options(selectinload(Player.role), selectinload(Player.user))
             .where(Player.session_id == session.id)
         )
     ).all()
@@ -744,7 +848,7 @@ async def execute_night_sequence(
                     "reason": "Нельзя лечить одного и того же два раунда подряд",
                 }
         available_targets = [
-            {"player_id": str(p.id), "name": p.name}
+            _player_target_dict(p)
             for p in alive
             if p.id != prev_heal_target_id
         ]
@@ -757,7 +861,7 @@ async def execute_night_sequence(
             return {
                 "action_type": "lover_visit",
                 "available_targets": [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in alive
                     if p.id != actor.id and p.id != rt.lover_last_target
                 ],
@@ -774,7 +878,7 @@ async def execute_night_sequence(
             return {
                 "action_type": "don_check",
                 "available_targets": [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in alive
                     if _not_mafia_target(p)
                 ],
@@ -783,7 +887,7 @@ async def execute_night_sequence(
             return {
                 "action_type": "check",
                 "available_targets": [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in alive
                     if p.id != actor.id
                 ],
@@ -801,7 +905,7 @@ async def execute_night_sequence(
             return {
                 "action_type": "maniac_kill",
                 "available_targets": [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in alive
                     if p.id != actor.id
                 ],
@@ -899,7 +1003,7 @@ async def execute_night_sequence(
                 return r is None or r.team != "mafia"
 
             available_targets = [
-                {"player_id": str(p.id), "name": p.name}
+                _player_target_dict(p)
                 for p in alive
                 if _is_non_mafia(p)
             ]
@@ -1384,7 +1488,13 @@ async def transition_to_voting(
             # Рассылаем phase_changed каждому игроку персонально, включая available_targets
             # (список живых, кроме себя и заблокированного), чтобы фронт мог отрисовать голосование
             # без дополнительного GET /state.
-            players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
+            players = (
+                await db.scalars(
+                    select(Player)
+                    .options(selectinload(Player.user))
+                    .where(Player.session_id == session_id)
+                )
+            ).all()
             alive = [p for p in players if p.status == "alive"]
             alive_candidates = [p for p in alive if candidate_ids is None or p.id in candidate_ids]
             timer_started_iso = rt.timer_started_at.isoformat()
@@ -1394,7 +1504,7 @@ async def transition_to_voting(
                 is_blocked = rt.day_blocked_player is not None and p.id == rt.day_blocked_player
                 targets = (
                     [
-                        {"player_id": str(t.id), "name": t.name}
+                        _player_target_dict(t)
                         for t in alive_candidates
                         if t.id != p.id
                     ]

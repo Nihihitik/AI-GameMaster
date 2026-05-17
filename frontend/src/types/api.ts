@@ -84,6 +84,8 @@ export interface CreateSessionResponse extends Session {}
 export interface PlayerInList {
   id: string;
   name: string;
+  /** Никнейм аккаунта (User.display_name) — отрисовывается под name в UI. */
+  username?: string | null;
   join_order: number;
   is_host: boolean;
   is_me: boolean;

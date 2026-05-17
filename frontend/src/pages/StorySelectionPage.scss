@@ -482,10 +482,30 @@
       background: rgba(200, 30, 30, 0.05);
     }
 
-    &-name {
+    &-info {
       flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    &-name {
       font-size: 14px;
-      color: rgba(255, 255, 255, 0.8);
+      color: rgba(255, 255, 255, 0.85);
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    &-nickname {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.4);
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     &-tag {

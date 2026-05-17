@@ -438,7 +438,12 @@ export default function StorySelectionPage() {
                           <span className="story-name-pick__player-spinner" aria-hidden="true" />
                         )}
                       </span>
-                      <span className="story-name-pick__player-name">{p.name}</span>
+                      <span className="story-name-pick__player-info">
+                        <span className="story-name-pick__player-name">{p.name}</span>
+                        {p.username && p.username !== p.name && (
+                          <span className="story-name-pick__player-nickname">{p.username}</span>
+                        )}
+                      </span>
                       {p.is_host && (
                         <span className="story-name-pick__player-tag">хост</span>
                       )}

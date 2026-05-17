@@ -215,7 +215,12 @@ export default function NightActionScreen() {
                 setSelectedTarget(target.player_id);
               }}
             >
-              {target.name}
+              <span className="night-action__target-info">
+                <span className="night-action__target-name">{target.name}</span>
+                {target.username && (
+                  <span className="night-action__target-nickname">{target.username}</span>
+                )}
+              </span>
             </SelectableCard>
           );
         })}

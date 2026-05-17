@@ -408,7 +408,13 @@ async def state(
     # роль игрока
     role = await db.get(Role, player.role_id) if player.role_id else None
 
-    all_players = (await db.scalars(select(Player).where(Player.session_id == session_id))).all()
+    all_players = (
+        await db.scalars(
+            select(Player)
+            .options(selectinload(Player.user))
+            .where(Player.session_id == session_id)
+        )
+    ).all()
 
     paused = session_is_paused(session.settings)
     if paused:
@@ -469,7 +475,13 @@ async def state(
             "is_blocked_tonight": is_blocked_tonight,
         },
         "players": [
-            {"id": str(p.id), "name": p.name, "status": p.status, "join_order": p.join_order}
+            {
+                "id": str(p.id),
+                "name": p.name,
+                "username": p.user.display_name if p.user else None,
+                "status": p.status,
+                "join_order": p.join_order,
+            }
             for p in sorted(all_players, key=lambda x: x.join_order)
         ],
         "awaiting_action": False,
