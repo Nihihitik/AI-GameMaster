@@ -1834,7 +1834,11 @@ async def finish_game(
         phase.ended_at = utc_now()
 
     players = (
-        await db.scalars(select(Player).options(selectinload(Player.role)).where(Player.session_id == session.id))
+        await db.scalars(
+            select(Player)
+            .options(selectinload(Player.role), selectinload(Player.user))
+            .where(Player.session_id == session.id)
+        )
     ).all()
     role_ids = {p.role_id for p in players if p.role_id}
     roles = (await db.scalars(select(Role).where(Role.id.in_(role_ids)))).all() if role_ids else []
@@ -1843,6 +1847,7 @@ async def finish_game(
         {
             "id": str(p.id),
             "name": p.name,
+            "username": p.user.display_name if p.user else None,
             "role": {"name": role_by_id[p.role_id].name, "team": role_by_id[p.role_id].team} if p.role_id else None,
             "status": p.status,
         }

@@ -27,7 +27,14 @@ from models.player import Player
 from models.role import Role
 from models.session import Session
 from schemas.game import NightActionRequest, VoteRequest
-from services.game_engine import acknowledge_role, get_current_phase, resolve_votes, start_game, transition_to_voting
+from services.game_engine import (
+    _player_target_dict,
+    acknowledge_role,
+    get_current_phase,
+    resolve_votes,
+    start_game,
+    transition_to_voting,
+)
 from services.audio_preload import clear_audio_preload
 from services.recovery_service import recover_missing_phase
 from services.runtime_state import runtime_state
@@ -553,31 +560,31 @@ async def state(
 
             if night_action == "kill":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive" and p.id != player.id and _team_of(p) != "mafia"
                 ]
             elif night_action == "heal":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive"
                 ]
             elif night_action == "check":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive" and p.id != player.id
                 ]
             elif night_action == "don_check":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive" and p.id != player.id and _team_of(p) != "mafia"
                 ]
             elif night_action == "lover_visit":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive"
                     and p.id != player.id
@@ -585,7 +592,7 @@ async def state(
                 ]
             elif night_action == "maniac_kill":
                 response["available_targets"] = [
-                    {"player_id": str(p.id), "name": p.name}
+                    _player_target_dict(p)
                     for p in all_players
                     if p.status == "alive" and p.id != player.id
                 ]
@@ -611,7 +618,7 @@ async def state(
         if player.status == "alive" and not is_voter_blocked:
             candidate_ids = set(rt.voting_candidate_ids or [])
             response["available_targets"] = [
-                {"player_id": str(p.id), "name": p.name}
+                _player_target_dict(p)
                 for p in all_players
                 if p.status == "alive"
                 and p.id != player.id

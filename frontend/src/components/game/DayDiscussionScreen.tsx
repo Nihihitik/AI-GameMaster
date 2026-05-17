@@ -74,7 +74,12 @@ export default function DayDiscussionScreen() {
             className={`day-discussion__player ${player.id === dayBlockedPlayer ? 'day-discussion__player--blocked' : ''}`}
           >
             <div className="day-discussion__player-number">{player.join_order}</div>
-            <span className="day-discussion__player-name">{player.name}</span>
+            <span className="day-discussion__player-info">
+              <span className="day-discussion__player-name">{player.name}</span>
+              {player.username && player.username !== player.name && (
+                <span className="day-discussion__player-nickname">{player.username}</span>
+              )}
+            </span>
             {player.id === dayBlockedPlayer && (
               <Badge variant="blocked">Заблокирован</Badge>
             )}
@@ -89,7 +94,12 @@ export default function DayDiscussionScreen() {
             {deadPlayers.map((player) => (
               <div key={player.id} className="day-discussion__player day-discussion__player--dead">
                 <div className="day-discussion__player-number">{player.join_order}</div>
-                <span className="day-discussion__player-name">{player.name}</span>
+                <span className="day-discussion__player-info">
+                  <span className="day-discussion__player-name">{player.name}</span>
+                  {player.username && player.username !== player.name && (
+                    <span className="day-discussion__player-nickname">{player.username}</span>
+                  )}
+                </span>
               </div>
             ))}
           </>
