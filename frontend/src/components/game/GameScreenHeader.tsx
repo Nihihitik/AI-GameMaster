@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import PauseButton from './PauseButton';
+import RulesModal, { RulesButton } from './RulesModal';
 import { useGameStore } from '../../stores/gameStore';
 import './GameScreenHeader.scss';
 
@@ -17,6 +18,8 @@ interface GameScreenHeaderProps {
    * рендерится автоматически.
    */
   showCharacterName?: boolean;
+  /** Показывать кнопку «Правила» (?) со встроенным модальным окном. */
+  showRulesButton?: boolean;
 }
 
 export default function GameScreenHeader({
@@ -27,7 +30,9 @@ export default function GameScreenHeader({
   pauseSlot,
   className,
   showCharacterName = true,
+  showRulesButton = false,
 }: GameScreenHeaderProps) {
+  const [rulesOpen, setRulesOpen] = useState(false);
   const myPlayerId = useGameStore((s) => s.myPlayerId);
   const myPlayer = useGameStore((s) =>
     myPlayerId ? s.players.find((p) => p.id === myPlayerId) ?? null : null,
@@ -45,6 +50,7 @@ export default function GameScreenHeader({
         <div className="game-screen-header__right">
           {right}
           {timer}
+          {showRulesButton && <RulesButton onClick={() => setRulesOpen(true)} />}
         </div>
       </div>
       {characterName && (
@@ -53,6 +59,7 @@ export default function GameScreenHeader({
           <span className="game-screen-header__character-name">{characterName}</span>
         </div>
       )}
+      {showRulesButton && <RulesModal isOpen={rulesOpen} onClose={() => setRulesOpen(false)} />}
     </header>
   );
 }

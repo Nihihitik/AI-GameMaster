@@ -1,14 +1,11 @@
 .game-screen-header {
   display: flex;
   flex-direction: column;
-  padding: 20px 20px 14px;
-  padding-top: calc(env(safe-area-inset-top, 0px) + 20px);
-  position: sticky;
-  top: 0;
+  padding: 14px 20px 10px;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 14px);
+  position: relative;
   z-index: 10;
-  background: rgba(0, 0, 0, 0.9);
-  backdrop-filter: blur(10px);
-  gap: 8px;
+  gap: 6px;
 
   &__row {
     display: flex;
@@ -18,9 +15,10 @@
   }
 
   &__left {
+    flex: 1;
     display: flex;
     align-items: center;
-    min-width: 40px;
+    min-width: 0;
   }
 
   &__title {
@@ -28,16 +26,18 @@
     font-weight: 700;
     color: #ffffff;
     margin: 0;
-    flex: 1;
+    flex: 0 0 auto;
     text-align: center;
+    white-space: nowrap;
   }
 
   &__right {
+    flex: 1;
     display: flex;
     align-items: center;
     justify-content: flex-end;
     gap: 10px;
-    min-width: 40px;
+    min-width: 0;
   }
 
   &__spacer {
@@ -53,6 +53,8 @@
     gap: 6px;
     font-size: 12px;
     line-height: 1.2;
+    text-align: center;
+    margin-top: -2px;
   }
 
   &__character-label {

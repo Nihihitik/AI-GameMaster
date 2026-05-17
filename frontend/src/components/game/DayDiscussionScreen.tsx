@@ -41,6 +41,7 @@ export default function DayDiscussionScreen() {
       <GameScreenHeader
         title="Обсуждение"
         timer={<Timer seconds={timeLeft} dangerThreshold={10} />}
+        showRulesButton
       />
 
       {nightResultDied && nightResultDied.length > 0 && (

@@ -165,6 +165,7 @@ export default function NightActionScreen() {
       <GameScreenHeader
         title={getActionTitle()}
         timer={<Timer seconds={timeLeft} dangerThreshold={5} />}
+        showRulesButton
       />
 
       <div className="night-action__label">{actionLabel}</div>
@@ -203,11 +204,11 @@ export default function NightActionScreen() {
             <SelectableCard
               key={target.player_id}
               state={state}
-              disabled={disabled}
+              disabled={disabled || (actionSubmitted && state !== 'selected')}
               hidden={hidden}
               rightSlot={rightSlot}
               onClick={() => {
-                if (disabled) return;
+                if (disabled || actionSubmitted) return;
                 if (state === 'checked-mafia') {
                   toggleHideResult(target.player_id);
                   return;

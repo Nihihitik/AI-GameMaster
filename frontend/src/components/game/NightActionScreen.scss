@@ -97,6 +97,7 @@
     padding: 0 20px;
     font-size: 14px;
     color: rgba(255, 255, 255, 0.4);
+    margin-top: 12px;
     margin-bottom: 20px;
     text-align: center;
     position: relative;
@@ -251,6 +252,7 @@
 
   &__actions {
     padding: 20px;
+    padding-bottom: 72px;
     display: flex;
     flex-direction: column;
     gap: 10px;

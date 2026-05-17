@@ -94,6 +94,7 @@ export default function DayVotingScreen() {
       <GameScreenHeader
         title="Голосование"
         timer={<Timer seconds={timeLeft} dangerThreshold={10} />}
+        showRulesButton
       />
 
       {votes && (
