@@ -265,6 +265,7 @@ export default function StorySelectionPage() {
       <GameScreenHeader
         title={phase === 'story' ? 'Сюжет' : 'Выбор персонажа'}
         showPause={false}
+        showCharacterName={false}
         pauseSlot={<span className="story-header__spacer" />}
         timer={phase === 'name-pick' ? <Timer seconds={nameTimer} dangerThreshold={10} /> : undefined}
       />
